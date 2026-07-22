@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Secrets and machine-local settings
+.env
+.env.*
+!.env.example
+config/*.local.json
+config/*secrets*.json
+*.key
+*.pem
+
+# Runtime artifacts
+outputs/
+runs/
+logs/
+tmp/
+*.log
+
+# Packaging
+build/
+dist/
+*.spec
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+

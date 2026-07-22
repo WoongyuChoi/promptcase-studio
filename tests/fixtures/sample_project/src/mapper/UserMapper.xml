@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="sample.mapper.UserMapper">
+  <select id="selectActiveUser" parameterType="string" resultType="sample.dto.UserDto">
+    SELECT USER_ID, USER_NAME, STATUS
+      FROM TB_USER
+     WHERE USER_ID = #{userId}
+       AND STATUS = 'ACTIVE'
+  </select>
+</mapper>
+

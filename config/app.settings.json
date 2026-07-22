@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "defaultEnvironment": "online",
+  "templatePath": "templates/단위테스트 템플릿.xlsx",
+  "outputDirectory": "outputs",
+  "runDirectory": "runs",
+  "mockMode": false,
+  "providers": {
+    "online": {
+      "type": "gemini",
+      "apiBase": "https://generativelanguage.googleapis.com/v1beta",
+      "model": "gemini-flash-latest",
+      "apiKeyEnv": "GEMINI_API_KEY",
+      "timeoutSeconds": 300,
+      "maxAttempts": 3,
+      "retryDelaySeconds": 2
+    },
+    "secure": {
+      "type": "qwen",
+      "settingsPath": "config/qwen.settings.json",
+      "timeoutSeconds": 300,
+      "maxAttempts": 3,
+      "retryDelaySeconds": 2,
+      "stream": true
+    }
+  },
+  "scanner": {
+    "maxCandidateFiles": 10000,
+    "maxChangedFileChars": 24000,
+    "maxRelatedFiles": 12,
+    "maxRelatedFileChars": 7000,
+    "maxContextChars": 70000
+  }
+}

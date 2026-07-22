@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Promptcase Studio Unit Test Response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["testCase", "testResult"],
+  "properties": {
+    "testCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "procedure",
+        "targetIds",
+        "targetNames",
+        "preconditions",
+        "testData",
+        "expectedResult",
+        "notes"
+      ],
+      "properties": {
+        "name": { "type": "string" },
+        "procedure": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "type": "string" }
+        },
+        "targetIds": { "type": "array", "items": { "type": "string" } },
+        "targetNames": { "type": "array", "items": { "type": "string" } },
+        "preconditions": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "type": "string" }
+        },
+        "testData": { "type": "string" },
+        "expectedResult": { "type": "string" },
+        "notes": { "type": "string" }
+      }
+    },
+    "testResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["processingDetails", "testDetails", "resultChecks"],
+      "properties": {
+        "processingDetails": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["title", "detail"],
+            "properties": {
+              "title": { "type": "string" },
+              "detail": { "type": "string" }
+            }
+          }
+        },
+        "testDetails": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "type": "string" }
+        },
+        "resultChecks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}
