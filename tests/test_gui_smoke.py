@@ -40,7 +40,14 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(window.width(), 1366)
         self.assertEqual(window.height(), 768)
         self.assertFalse(window.windowIcon().isNull())
-        self.assertTrue(window.secure_radio.isChecked())
+        self.assertEqual(
+            window.online_radio.isChecked(),
+            window.settings.get("defaultEnvironment", "secure") == "online",
+        )
+        self.assertEqual(
+            window.secure_radio.isChecked(),
+            window.settings.get("defaultEnvironment", "secure") == "secure",
+        )
         self.assertEqual(window.online_radio.text(), "온라인(Gemini)")
         self.assertEqual(window.secure_radio.text(), "폐쇄망(Qwen)")
         self.assertEqual(window.findChild(QLabel, "brandTitle").text(), "PROMPTCASE STUDIO")
@@ -466,7 +473,7 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(dialog.cancel_button.objectName(), "dialogSecondaryButton")
         self.assertEqual(dialog.save_button.size(), QSize(88, 32))
         self.assertEqual(dialog.cancel_button.size(), QSize(72, 32))
-        self.assertEqual(dialog.qwen_browse_button.size(), QSize(92, 32))
+        self.assertEqual(dialog.qwen_browse_button.size(), QSize(92, 28))
         self.assertEqual(dialog.qwen_settings_path.text(), "config/qwen.settings.json")
         self.assertEqual(dialog.gemini_timeout.value(), 300)
         self.assertEqual(dialog.gemini_model.currentData(), "auto")
@@ -514,22 +521,56 @@ class GuiSmokeTests(unittest.TestCase):
         tabs = dialog.findChild(QTabWidget)
         tabs.setCurrentIndex(0)
         self.app.processEvents()
-        self.assertEqual(dialog.qwen_settings_path.minimumHeight(), 32)
-        self.assertEqual(dialog.qwen_settings_path.maximumHeight(), 32)
-        self.assertEqual(dialog.quality_gate_mode.height(), 34)
-        self.assertGreaterEqual(dialog.quality_gate_mode.view().minimumHeight(), 72)
+        self.assertEqual(dialog.qwen_settings_path.minimumHeight(), 28)
+        self.assertEqual(dialog.qwen_settings_path.maximumHeight(), 28)
+        self.assertEqual(dialog.quality_gate_mode.height(), 24)
+        self.assertGreaterEqual(dialog.quality_gate_mode.view().minimumHeight(), 52)
         dialog.quality_gate_mode.showPopup()
         self.app.processEvents()
         self.assertTrue(dialog.quality_gate_mode.view().isVisible())
-        self.assertGreaterEqual(
+        last_item = dialog.quality_gate_mode.model().index(
+            dialog.quality_gate_mode.count() - 1,
+            0,
+        )
+        self.assertLess(
+            dialog.quality_gate_mode.view().visualRect(last_item).bottom(),
             dialog.quality_gate_mode.view().viewport().height(),
-            56,
         )
         dialog.quality_gate_mode.hidePopup()
-        self.assertEqual(dialog.qwen_timeout.minimumHeight(), 32)
-        self.assertEqual(dialog.qwen_timeout.maximumHeight(), 32)
+        self.assertEqual(dialog.qwen_timeout.minimumHeight(), 24)
+        self.assertEqual(dialog.qwen_timeout.maximumHeight(), 24)
+        field_labels = dialog.findChildren(QLabel, "settingsFieldLabel")
+        self.assertEqual(len(field_labels), 14)
+        self.assertTrue(
+            all(
+                label.font().pixelSize()
+                == dialog.quality_review_checkbox.font().pixelSize()
+                for label in field_labels
+            )
+        )
+        self.assertTrue(
+            all(
+                label.font().weight()
+                == dialog.quality_review_checkbox.font().weight()
+                for label in field_labels
+            )
+        )
+        self.assertEqual(
+            dialog.quality_review_passes.font().pixelSize(),
+            window.date_from.font().pixelSize(),
+        )
+        self.assertEqual(
+            dialog.quality_gate_mode.font().pixelSize(),
+            window.date_from.font().pixelSize(),
+        )
+        self.assertLessEqual(
+            abs(dialog.quality_gate_mode.height() - window.date_from.height()),
+            1,
+        )
+        self.assertEqual(dialog.qwen_settings_path.font().pixelSize(), 12)
+        self.assertEqual(dialog.gemini_key.font().pixelSize(), 12)
         self.assertEqual(dialog.save_button.height(), window.run_button.height())
-        self.assertEqual(dialog.qwen_browse_button.height(), window.run_button.height())
+        self.assertEqual(dialog.qwen_browse_button.height(), 28)
         self.assertTrue(increase.isVisible())
         self.assertTrue(decrease.isVisible())
         self.assertLess(increase.geometry().right(), dialog.quality_review_passes.width())

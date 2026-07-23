@@ -63,6 +63,11 @@ QFrame#card {
 QLabel#sectionTitle { color: #162033; font-size: 13px; font-weight: 750; }
 QLabel#sectionHint { color: #7D899B; font-size: 13px; }
 QLabel#fieldLabel { color: #49566A; font-size: 14px; font-weight: 650; }
+QLabel#settingsFieldLabel {
+    color: #344054;
+    font-size: 12px;
+    font-weight: 400;
+}
 QLabel#settingsGroupTitle { color: #26354B; font-size: 14px; font-weight: 750; }
 QLabel#dateRangeLabel { color: #667085; font-size: 12px; font-weight: 650; }
 QToolButton#helpBadge {
@@ -169,25 +174,27 @@ QDialog#settingsDialog QPushButton {
     border-radius: 7px;
     font-size: 13px;
 }
-QDialog#settingsDialog QLineEdit, QDialog#settingsDialog QComboBox {
-    padding: 4px 8px;
-    font-size: 13px;
+QDialog#settingsDialog QLineEdit {
+    padding: 2px 7px;
+    font-size: 12px;
 }
 QDialog#settingsDialog QComboBox {
-    padding: 0 10px;
+    padding: 0 8px;
+    font-size: 11px;
 }
 QDialog#settingsDialog QComboBox QAbstractItemView {
-    padding: 4px;
+    padding: 2px;
     border: 1px solid #C9D4E1;
     background: #FFFFFF;
     color: #344054;
     selection-background-color: #E5F7E8;
     selection-color: #126B20;
     outline: 0;
+    font-size: 12px;
 }
 QDialog#settingsDialog QComboBox QAbstractItemView::item {
-    min-height: 28px;
-    padding: 3px 8px;
+    min-height: 20px;
+    padding: 2px 7px;
 }
 QDialog#settingsDialog QRadioButton,
 QDialog#settingsDialog QCheckBox {
@@ -219,6 +226,11 @@ QPushButton#dialogBrowseButton {
     background: #FFFFFF;
     border-color: #CFD9E6;
     color: #344054;
+}
+QDialog#settingsDialog QPushButton#dialogBrowseButton {
+    min-height: 26px;
+    max-height: 28px;
+    font-size: 12px;
 }
 QPushButton#topActionButton {
     min-height: 28px;
@@ -270,13 +282,14 @@ QProgressBar, QProgressBar#miniProgress {
 }
 QProgressBar::chunk { background: #16B53A; border-radius: 3px; }
 QSpinBox#stepperSpinBox {
-    min-height: 22px;
-    max-height: 22px;
-    padding: 4px 57px 4px 8px;
+    min-height: 20px;
+    max-height: 20px;
+    padding: 1px 47px 1px 6px;
+    font-size: 11px;
 }
 QToolButton#spinIncreaseButton, QToolButton#spinDecreaseButton {
-    min-width: 25px;
-    max-width: 25px;
+    min-width: 21px;
+    max-width: 21px;
     min-height: 0;
     padding: 0;
     margin: 0;
@@ -285,7 +298,7 @@ QToolButton#spinIncreaseButton, QToolButton#spinDecreaseButton {
     border: 0;
     border-left: 1px solid #D8E0EA;
     font-family: "Segoe UI", sans-serif;
-    font-size: 13px;
+    font-size: 11px;
     font-weight: 700;
 }
 QToolButton#spinIncreaseButton {

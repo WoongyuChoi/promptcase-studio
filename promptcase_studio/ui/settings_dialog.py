@@ -50,7 +50,7 @@ class StepperSpinBox(QSpinBox):
         self.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.setMinimumWidth(96)
         self.setMaximumWidth(180)
-        self.setFixedHeight(32)
+        self.setFixedHeight(24)
         self._increase = QToolButton(self)
         self._increase.setObjectName("spinIncreaseButton")
         self._increase.setText("+")
@@ -74,8 +74,8 @@ class StepperSpinBox(QSpinBox):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        button_width = 26
-        button_height = max(20, self.height() - 2)
+        button_width = 22
+        button_height = max(18, self.height() - 2)
         increase_left = self.width() - button_width - 1
         decrease_left = increase_left - button_width
         self._decrease.setGeometry(decrease_left, 1, button_width, button_height)
@@ -112,9 +112,9 @@ class SettingsDialog(QDialog):
         for field in self.findChildren(QLineEdit):
             if isinstance(field.parentWidget(), QSpinBox):
                 continue
-            field.setFixedHeight(32)
+            field.setFixedHeight(28)
         for field in self.findChildren(QComboBox):
-            field.setFixedHeight(34)
+            field.setFixedHeight(24)
 
         self.button_box = QDialogButtonBox(
             QDialogButtonBox.Save | QDialogButtonBox.Cancel
@@ -145,6 +145,12 @@ class SettingsDialog(QDialog):
         button = HelpTooltipButton(title, body)
         self.help_buttons.append(button)
         return button
+
+    @staticmethod
+    def _field_label(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("settingsFieldLabel")
+        return label
 
     def _settings_section(
         self,
@@ -243,14 +249,12 @@ class SettingsDialog(QDialog):
 
         quality_count_row = QHBoxLayout()
         quality_count_row.setSpacing(8)
-        quality_count_label = QLabel("품질 검토 횟수")
-        quality_count_label.setObjectName("fieldLabel")
+        quality_count_label = self._field_label("품질 검토 횟수")
         self.quality_review_passes = StepperSpinBox()
         self.quality_review_passes.setRange(1, 3)
         self.quality_review_passes.setSuffix(" 회")
         self.quality_review_passes.setValue(int(self.settings.get("qualityReviewPasses", 2)))
-        review_validation_label = QLabel("검토 응답 시도")
-        review_validation_label.setObjectName("fieldLabel")
+        review_validation_label = self._field_label("검토 응답 시도")
         self.quality_review_validation_attempts = StepperSpinBox()
         self.quality_review_validation_attempts.setRange(1, 3)
         self.quality_review_validation_attempts.setSuffix(" 회")
@@ -276,8 +280,7 @@ class SettingsDialog(QDialog):
 
         quality_gate_row = QHBoxLayout()
         quality_gate_row.setSpacing(8)
-        quality_gate_label = QLabel("완료 정책")
-        quality_gate_label.setObjectName("fieldLabel")
+        quality_gate_label = self._field_label("완료 정책")
         self.quality_gate_mode = QComboBox()
         self.quality_gate_mode.addItem("최선본 다운로드 허용", "best_effort")
         self.quality_gate_mode.addItem("필수 품질 문제 시 다운로드 차단", "strict")
@@ -299,8 +302,7 @@ class SettingsDialog(QDialog):
 
         validation_row = QHBoxLayout()
         validation_row.setSpacing(8)
-        validation_label = QLabel("응답 형식 검증")
-        validation_label.setObjectName("fieldLabel")
+        validation_label = self._field_label("응답 형식 검증")
         self.validation_attempts = StepperSpinBox()
         self.validation_attempts.setRange(1, 5)
         self.validation_attempts.setSuffix(" 회")
@@ -364,7 +366,7 @@ class SettingsDialog(QDialog):
             self.gemini_model.addItem(model.choice_label, model.model_id)
         self.gemini_model.setMaxVisibleItems(self.gemini_model.count())
         self.gemini_model.view().setMinimumHeight(
-            min(180, self.gemini_model.count() * 24 + 8)
+            min(140, self.gemini_model.count() * 22 + 6)
         )
         selected_model = normalize_gemini_model_id(online.get("model", AUTO_GEMINI_MODEL))
         selected_index = self.gemini_model.findData(selected_model)
@@ -407,12 +409,12 @@ class SettingsDialog(QDialog):
         model_layout.addWidget(self.gemini_model_help)
         model_layout.addStretch(1)
 
-        form.addRow("API 주소", self.gemini_base)
-        form.addRow("Gemini 모델", model_row)
-        form.addRow("API Key", self.gemini_key)
-        form.addRow("응답 제한 시간", self.gemini_timeout)
-        form.addRow("요청 시도 횟수", self.gemini_attempts)
-        form.addRow("최대 응답 토큰", self.gemini_output_tokens)
+        form.addRow(self._field_label("API 주소"), self.gemini_base)
+        form.addRow(self._field_label("Gemini 모델"), model_row)
+        form.addRow(self._field_label("API Key"), self.gemini_key)
+        form.addRow(self._field_label("응답 제한 시간"), self.gemini_timeout)
+        form.addRow(self._field_label("요청 시도 횟수"), self.gemini_attempts)
+        form.addRow(self._field_label("최대 응답 토큰"), self.gemini_output_tokens)
         settings_layout.addLayout(form)
         page_layout.addWidget(settings_section)
         page_layout.addStretch(1)
@@ -477,16 +479,16 @@ class SettingsDialog(QDialog):
         self.qwen_output_tokens.setValue(int(secure.get("maxOutputTokens", 32768)))
         self.qwen_browse_button = QPushButton("파일 선택")
         self.qwen_browse_button.setObjectName("dialogBrowseButton")
-        self.qwen_browse_button.setFixedSize(92, 32)
+        self.qwen_browse_button.setFixedSize(92, 28)
         self.qwen_browse_button.clicked.connect(self._browse_qwen_settings)
         row = QHBoxLayout()
         row.setSpacing(8)
         row.addWidget(self.qwen_settings_path, 1)
         row.addWidget(self.qwen_browse_button)
-        form.addRow("Qwen 설정 파일", row)
-        form.addRow("응답 제한 시간", self.qwen_timeout)
-        form.addRow("요청 시도 횟수", self.qwen_attempts)
-        form.addRow("최대 응답 토큰", self.qwen_output_tokens)
+        form.addRow(self._field_label("Qwen 설정 파일"), row)
+        form.addRow(self._field_label("응답 제한 시간"), self.qwen_timeout)
+        form.addRow(self._field_label("요청 시도 횟수"), self.qwen_attempts)
+        form.addRow(self._field_label("최대 응답 토큰"), self.qwen_output_tokens)
         settings_layout.addLayout(form)
         page_layout.addWidget(settings_section)
         page_layout.addStretch(1)
