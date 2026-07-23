@@ -115,6 +115,26 @@ class ResponseParserTests(unittest.TestCase):
         result = parse_structured_response(json.dumps(payload, ensure_ascii=False))
         self.assertIn(",", result["testCase"]["testData"])
 
+    def test_accepts_natural_complete_sentences_that_end_in_da(self):
+        payload = valid_payload()
+        payload["testCase"]["procedure"][2] = (
+            "카드 정보를 수정한 후 저장 버튼을 누른다"
+        )
+        payload["testCase"]["preconditions"][0] = (
+            "비교 기준 데이터가 준비되어 있다"
+        )
+
+        result = parse_structured_response(json.dumps(payload, ensure_ascii=False))
+
+        self.assertEqual(
+            result["testCase"]["procedure"][2],
+            "카드 정보를 수정한 후 저장 버튼을 누른다",
+        )
+        self.assertEqual(
+            result["testCase"]["preconditions"][0],
+            "비교 기준 데이터가 준비되어 있다",
+        )
+
     def test_processing_details_accepts_five_and_rejects_six(self):
         payload = valid_payload()
         payload["testResult"]["processingDetails"] = [

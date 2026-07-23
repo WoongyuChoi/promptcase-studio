@@ -67,3 +67,7 @@ class PipelineResult:
     suggested_filename: str
     response_path: Path
     scan_bundle: ScanBundle
+    quality_status: str = "pass"
+    quality_score: int = 100
+    quality_issue_count: int = 0
+    quality_critical_count: int = 0

@@ -8,6 +8,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from promptcase_studio.config import (
+    _migrate_gemini_model,
     _migrate_legacy_template_path,
     _replace_from_bundle,
     build_runtime_paths,
@@ -58,6 +59,13 @@ class RuntimePathsTests(unittest.TestCase):
 
         self.assertEqual(migrated["templatePath"], UNIT_TEST_TEMPLATE.relative_path)
         self.assertEqual(UNIT_TEST_TEMPLATE.download_name, "단위테스트 템플릿.xlsx")
+
+    def test_legacy_gemini_latest_alias_is_migrated_to_stable_model(self) -> None:
+        settings = {"providers": {"online": {"model": "gemini-flash-latest"}}}
+
+        migrated = _migrate_gemini_model(settings)
+
+        self.assertEqual(migrated["providers"]["online"]["model"], "auto")
 
     def test_bundled_resource_replace_retries_transient_windows_lock(self) -> None:
         with writable_test_directory() as directory:

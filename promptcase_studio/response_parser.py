@@ -459,7 +459,7 @@ def parse_structured_response(raw: str, evidence_text: str | None = None) -> dic
                 5,
                 minimum_chars=8,
                 maximum_chars=160,
-                endings=("한다",),
+                endings=("다",),
             ),
             _raw_string_list(test_case.get("procedure")),
         )
@@ -473,7 +473,7 @@ def parse_structured_response(raw: str, evidence_text: str | None = None) -> dic
                 5,
                 minimum_chars=8,
                 maximum_chars=160,
-                endings=("한다",),
+                endings=("다",),
             ),
             _raw_string_list(test_case.get("preconditions")),
         )

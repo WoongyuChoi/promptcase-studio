@@ -55,6 +55,7 @@ LOG_COLORS = {
     "PROMPT": "#FDE68A",
     "API": "#FDBA74",
     "RETRY": "#FBBF24",
+    "FALLBACK": "#F59E0B",
     "MOCK": "#D8B4FE",
     "RESPONSE": "#86EFAC",
     "ATTEMPT": "#FDBA74",
@@ -65,6 +66,8 @@ LOG_COLORS = {
     "EXCEL": "#93C5FD",
     "DONE": "#6EE7B7",
     "WARN": "#FCD34D",
+    "QUOTA": "#FDBA74",
+    "PAUSED": "#FDBA74",
     "ERROR": "#FDA4AF",
     "TRACE": "#64748B",
     "INFO": "#94A3B8",
@@ -598,6 +601,16 @@ class MainWindow(QMainWindow):
         self.last_result = result
         self.current_run_succeeded = True
         self.download_button.setEnabled(True)
+        if result.quality_status == "review_required":
+            QMessageBox.warning(
+                self,
+                "검토 필요 초안 생성 완료",
+                "다운로드 가능한 최선의 초안을 생성했습니다.\n"
+                f"품질 점수 {result.quality_score}점, 필수 검토 항목 "
+                f"{result.quality_critical_count}건이 남아 있습니다.\n"
+                "저장 후 실행 폴더의 품질 진단과 문안을 함께 확인해 주세요.",
+            )
+            return
         QMessageBox.information(
             self,
             "분석 완료",
@@ -606,6 +619,9 @@ class MainWindow(QMainWindow):
         )
 
     def _pipeline_failed(self, message: str) -> None:
+        if "일일 요청 한도" in message or "AI 사용량 한도" in message:
+            QMessageBox.warning(self, "AI 사용량 한도 도달", message)
+            return
         QMessageBox.critical(self, "작업 실패", message)
 
     def _worker_finished(self) -> None:

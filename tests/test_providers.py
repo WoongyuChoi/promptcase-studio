@@ -1,3 +1,4 @@
+import io
 import json
 import unittest
 import urllib.error
@@ -5,8 +6,17 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
-from promptcase_studio.providers.base import ProviderError, open_with_retry, split_prompt_sections
+from promptcase_studio.providers.base import (
+    ProviderError,
+    ProviderRateLimitError,
+    open_with_retry,
+    split_prompt_sections,
+)
 from promptcase_studio.providers.gemini import GeminiProvider
+from promptcase_studio.gemini_models import (
+    gemini_model_sequence,
+    normalize_gemini_model_id,
+)
 from promptcase_studio.providers.qwen import QwenProvider, load_qwen_profile
 from promptcase_studio.response_parser import parse_structured_response
 from tests.test_response_parser import valid_payload
@@ -225,6 +235,159 @@ class ProviderParsingTests(unittest.TestCase):
         self.assertEqual(system_prompt, "응답은 요청된 JSON 객체 하나만 출력한다.")
         self.assertEqual(user_prompt, "plain fixture prompt")
 
+    def test_gemini_model_catalog_normalizes_latest_alias_and_deduplicates(self):
+        self.assertEqual(normalize_gemini_model_id("gemini-flash-latest"), "auto")
+        self.assertEqual(
+            gemini_model_sequence(
+                "gemini-flash-latest",
+                ["gemini-3.5-flash-lite", "gemini-3.5-flash-lite"],
+            ),
+            ("gemini-3.6-flash", "gemini-3.5-flash-lite"),
+        )
+
+    @patch("promptcase_studio.providers.gemini.open_with_retry")
+    def test_gemini_daily_quota_falls_back_and_reuses_successful_model(self, open_retry):
+        response_payload = {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "{\"ok\":true}"}]},
+                    "finishReason": "STOP",
+                }
+            ]
+        }
+        open_retry.side_effect = [
+            ProviderRateLimitError(
+                "Gemini",
+                daily_quota=True,
+                free_tier=True,
+                quota_value="20",
+                model="gemini-3.6-flash",
+            ),
+            StaticResponse(response_payload),
+            StaticResponse(response_payload),
+        ]
+        provider = GeminiProvider(
+            {
+                "apiBase": "https://example.invalid",
+                "model": "gemini-3.6-flash",
+                "fallbackOnDailyQuota": True,
+                "fallbackModels": ["gemini-3.5-flash-lite"],
+            },
+            "fixture-key",
+        )
+        logs = []
+
+        self.assertEqual(
+            provider.generate("first", log=lambda level, message: logs.append((level, message))),
+            '{"ok":true}',
+        )
+        self.assertEqual(provider.generate("second"), '{"ok":true}')
+
+        requested_urls = [call.args[0].full_url for call in open_retry.call_args_list]
+        self.assertIn("gemini-3.6-flash:generateContent", requested_urls[0])
+        self.assertIn("gemini-3.5-flash-lite:generateContent", requested_urls[1])
+        self.assertIn("gemini-3.5-flash-lite:generateContent", requested_urls[2])
+        self.assertEqual(provider.model, "gemini-3.5-flash-lite")
+        self.assertTrue(any(level == "FALLBACK" for level, _message in logs))
+
+    @patch("promptcase_studio.providers.gemini.open_with_retry")
+    def test_gemini_auto_switches_after_transient_rate_limit_retries_are_exhausted(
+        self, open_retry
+    ):
+        response_payload = {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "{\"ok\":true}"}]},
+                    "finishReason": "STOP",
+                }
+            ]
+        }
+        open_retry.side_effect = [
+            ProviderRateLimitError(
+                "Gemini",
+                retry_after_seconds=30,
+                daily_quota=False,
+            ),
+            StaticResponse(response_payload),
+        ]
+        provider = GeminiProvider(
+            {
+                "apiBase": "https://example.invalid",
+                "model": "auto",
+                "fallbackModels": ["gemini-3.5-flash-lite"],
+            },
+            "fixture-key",
+        )
+        logs = []
+
+        result = provider.generate(
+            "fixture prompt",
+            log=lambda level, message: logs.append((level, message)),
+        )
+
+        self.assertEqual(result, '{"ok":true}')
+        self.assertEqual(open_retry.call_count, 2)
+        self.assertEqual(provider.model, "gemini-3.5-flash-lite")
+        self.assertTrue(any(level == "FALLBACK" for level, _message in logs))
+        self.assertTrue(any("요청 한도 재시도 소진" in message for _level, message in logs))
+
+    @patch("promptcase_studio.providers.gemini.open_with_retry")
+    def test_fixed_gemini_model_does_not_fall_back_on_daily_quota(self, open_retry):
+        open_retry.side_effect = ProviderRateLimitError(
+            "Gemini",
+            daily_quota=True,
+            model="gemini-3.5-flash-lite",
+        )
+        provider = GeminiProvider(
+            {
+                "apiBase": "https://example.invalid",
+                "model": "gemini-3.5-flash-lite",
+                "fallbackModels": ["gemini-3.1-flash-lite"],
+            },
+            "fixture-key",
+        )
+
+        with self.assertRaises(ProviderRateLimitError):
+            provider.generate("fixture prompt")
+
+        self.assertEqual(open_retry.call_count, 1)
+        self.assertFalse(provider.auto_model_selection)
+        self.assertEqual(provider.models, ("gemini-3.5-flash-lite",))
+
+    @patch("promptcase_studio.providers.gemini.open_with_retry")
+    def test_gemini_reports_quota_after_all_configured_models_are_exhausted(self, open_retry):
+        open_retry.side_effect = [
+            ProviderRateLimitError(
+                "Gemini",
+                daily_quota=True,
+                model="gemini-3.6-flash",
+            ),
+            ProviderRateLimitError(
+                "Gemini",
+                daily_quota=True,
+                model="gemini-3.5-flash-lite",
+            ),
+        ]
+        provider = GeminiProvider(
+            {
+                "apiBase": "https://example.invalid",
+                "model": "auto",
+                "fallbackModels": ["gemini-3.5-flash-lite"],
+            },
+            "fixture-key",
+        )
+        logs = []
+
+        with self.assertRaises(ProviderRateLimitError):
+            provider.generate(
+                "fixture prompt",
+                log=lambda level, message: logs.append((level, message)),
+            )
+
+        self.assertEqual(open_retry.call_count, 2)
+        self.assertTrue(any(level == "FALLBACK" for level, _message in logs))
+        self.assertTrue(any(level == "QUOTA" for level, _message in logs))
+
     def test_provider_bodies_keep_unsplit_prompt_as_user_content(self):
         response = StaticResponse(
             {
@@ -406,6 +569,7 @@ class ProviderParsingTests(unittest.TestCase):
         gemini_body = json.loads(gemini_request.data.decode("utf-8"))
         self.assertEqual(gemini_body["generationConfig"]["responseMimeType"], "application/json")
         self.assertEqual(gemini_body["generationConfig"]["maxOutputTokens"], 16384)
+        self.assertNotIn("temperature", gemini_body["generationConfig"])
         self.assertEqual(gemini_body["system_instruction"]["parts"][0]["text"], "system contract")
         self.assertEqual(gemini_body["contents"][0]["parts"][0]["text"], "fixture prompt")
         self.assertEqual(gemini.last_diagnostics.finish_reason, "STOP")
@@ -545,6 +709,102 @@ class ProviderParsingTests(unittest.TestCase):
         self.assertEqual(urlopen.call_count, 3)
         self.assertEqual([call.args[0] for call in sleep.call_args_list], [2, 4])
         self.assertEqual([level for level, _ in logs], ["RETRY", "RETRY"])
+
+    @patch("promptcase_studio.providers.base.time.sleep")
+    @patch("promptcase_studio.providers.base.urllib.request.urlopen")
+    def test_daily_gemini_quota_stops_without_pointless_retry(self, urlopen, sleep):
+        payload = {
+            "error": {
+                "code": 429,
+                "message": (
+                    "Quota exceeded for daily requests. Please retry in 50.154492449s."
+                ),
+                "status": "RESOURCE_EXHAUSTED",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                        "violations": [
+                            {
+                                "quotaMetric": "generate_content_free_tier_requests",
+                                "quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+                                "quotaDimensions": {"model": "gemini-3.6-flash"},
+                                "quotaValue": "20",
+                            }
+                        ],
+                    },
+                    {
+                        "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                        "retryDelay": "50s",
+                    },
+                ],
+            }
+        }
+        urlopen.side_effect = urllib.error.HTTPError(
+            "https://example.invalid",
+            429,
+            "RESOURCE_EXHAUSTED",
+            {},
+            io.BytesIO(json.dumps(payload).encode("utf-8")),
+        )
+
+        with self.assertRaises(ProviderRateLimitError) as raised:
+            open_with_retry(
+                urllib.request.Request("https://example.invalid"),
+                timeout=300,
+                provider_name="Gemini",
+                max_attempts=3,
+                retry_delay_seconds=2,
+            )
+
+        self.assertEqual(urlopen.call_count, 1)
+        sleep.assert_not_called()
+        self.assertTrue(raised.exception.daily_quota)
+        self.assertTrue(raised.exception.free_tier)
+        self.assertEqual(raised.exception.quota_value, "20")
+        self.assertEqual(raised.exception.model, "gemini-3.6-flash")
+        self.assertAlmostEqual(raised.exception.retry_after_seconds or 0, 50.154492449)
+        self.assertIn("20건을 모두", str(raised.exception))
+        self.assertNotIn("20건를", str(raised.exception))
+
+    @patch("promptcase_studio.providers.base.time.sleep")
+    @patch("promptcase_studio.providers.base.urllib.request.urlopen")
+    def test_transient_rate_limit_honors_server_retry_delay(self, urlopen, sleep):
+        payload = {
+            "error": {
+                "code": 429,
+                "message": "Requests per minute exceeded.",
+                "status": "RESOURCE_EXHAUSTED",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                        "retryDelay": "11.5s",
+                    }
+                ],
+            }
+        }
+        rate_error = urllib.error.HTTPError(
+            "https://example.invalid",
+            429,
+            "RESOURCE_EXHAUSTED",
+            {},
+            io.BytesIO(json.dumps(payload).encode("utf-8")),
+        )
+        response = object()
+        urlopen.side_effect = [rate_error, response]
+        logs = []
+
+        result = open_with_retry(
+            urllib.request.Request("https://example.invalid"),
+            timeout=300,
+            provider_name="Gemini",
+            max_attempts=3,
+            retry_delay_seconds=2,
+            log=lambda level, message: logs.append((level, message)),
+        )
+
+        self.assertIs(result, response)
+        sleep.assert_called_once_with(11.5)
+        self.assertIn("요청 제한 재시도", logs[0][1])
 
     @patch("promptcase_studio.providers.base.urllib.request.urlopen")
     def test_does_not_retry_after_response_read_has_started(self, urlopen):

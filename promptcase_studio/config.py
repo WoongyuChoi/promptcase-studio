@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from promptcase_studio.template_catalog import UNIT_TEST_TEMPLATE
+from promptcase_studio.gemini_models import AUTO_GEMINI_MODEL, normalize_gemini_model_id
 
 
 APP_NAME = "Promptcase Studio"
@@ -322,11 +323,27 @@ def _migrate_legacy_template_path(settings: dict[str, Any]) -> dict[str, Any]:
     return settings
 
 
+def _migrate_gemini_model(settings: dict[str, Any]) -> dict[str, Any]:
+    providers = settings.get("providers", {})
+    if not isinstance(providers, dict):
+        return settings
+    online = providers.get("online", {})
+    if not isinstance(online, dict):
+        return settings
+    selected = normalize_gemini_model_id(online.get("model"))
+    if online.get("fallbackOnDailyQuota") is True:
+        selected = AUTO_GEMINI_MODEL
+    online["model"] = selected
+    online.pop("fallbackOnDailyQuota", None)
+    return settings
+
+
 def load_settings() -> dict[str, Any]:
     initialize_runtime_environment()
     settings = _read_json(DEFAULT_SETTINGS_PATH)
     settings = _deep_merge(settings, _read_json(LOCAL_SETTINGS_PATH))
-    return _migrate_legacy_template_path(settings)
+    settings = _migrate_legacy_template_path(settings)
+    return _migrate_gemini_model(settings)
 
 
 def save_local_settings(settings: dict[str, Any]) -> None:

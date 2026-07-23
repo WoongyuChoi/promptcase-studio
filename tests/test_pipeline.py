@@ -7,9 +7,9 @@ from unittest.mock import patch
 
 from promptcase_studio.config import load_settings
 from promptcase_studio.models import AnalysisRequest, ChangeItem
-from promptcase_studio.pipeline import _document_title, _program_info, run_pipeline
+from promptcase_studio.pipeline import PipelinePausedError, _document_title, _program_info, run_pipeline
 from promptcase_studio.providers.mock import MockProvider
-from promptcase_studio.providers.base import ProviderError
+from promptcase_studio.providers.base import ProviderError, ProviderRateLimitError
 from promptcase_studio.response_parser import ResponseValidationError
 
 
@@ -268,6 +268,7 @@ class PipelineTests(unittest.TestCase):
         settings = deepcopy(load_settings())
         settings["mockMode"] = False
         settings["qualityReviewEnabled"] = False
+        settings["qualityGateMode"] = "strict"
         settings["responseValidationAttempts"] = 1
         settings["templatePath"] = str(PROJECT_ROOT / "templates" / "unittest_template.xlsx")
         settings["runDirectory"] = str(case_directory / "runs")
@@ -374,6 +375,184 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(quality["selected"], "review")
         self.assertNotIn("서비스 객체", " ".join(document["testCase"]["preconditions"]))
         self.assertTrue(any(level == "REVIEW" for level, _message in logs))
+
+    def test_daily_quota_during_review_preserves_draft_and_quality_diagnostics(self):
+        class QuotaAfterDraftProvider:
+            def __init__(self):
+                self.calls = 0
+
+            def generate(self, prompt, log=None, on_chunk=None):
+                self.calls += 1
+                if self.calls > 1:
+                    raise ProviderRateLimitError(
+                        "Gemini",
+                        retry_after_seconds=50,
+                        daily_quota=True,
+                        free_tier=True,
+                        quota_value="20",
+                        model="gemini-3.6-flash",
+                    )
+                payload = json.loads(MockProvider().generate(prompt, log=log, on_chunk=on_chunk))
+                payload["testCase"]["preconditions"][0] = (
+                    "UserService 서비스 객체가 생성되어 있어야 한다"
+                )
+                return json.dumps(payload, ensure_ascii=False)
+
+        case_directory = TEMP_ROOT / "pipeline-quality-review-quota"
+        run_root = case_directory / "runs"
+        case_directory.mkdir(parents=True, exist_ok=True)
+        before = set(run_root.iterdir()) if run_root.exists() else set()
+        settings = deepcopy(load_settings())
+        settings["mockMode"] = False
+        settings["qualityReviewEnabled"] = True
+        settings["qualityReviewPasses"] = 1
+        settings["qualityReviewValidationAttempts"] = 1
+        settings["qualityGateMode"] = "strict"
+        settings["templatePath"] = str(PROJECT_ROOT / "templates" / "unittest_template.xlsx")
+        settings["runDirectory"] = str(run_root)
+        provider = QuotaAfterDraftProvider()
+        request = AnalysisRequest(
+            project_roots=[FIXTURE_ROOT.resolve()],
+            manual_changes="변경: src/service/UserService.java",
+            request_text="활성 사용자 조회 조건을 변경함",
+            environment="online",
+            include_git=False,
+        )
+        logs = []
+
+        with (
+            patch("promptcase_studio.pipeline.create_provider", return_value=provider),
+            self.assertRaisesRegex(PipelinePausedError, "일일 요청 한도"),
+        ):
+            run_pipeline(
+                request,
+                settings,
+                log=lambda level, message: logs.append((level, message)),
+            )
+
+        created = set(run_root.iterdir()) - before
+        self.assertEqual(len(created), 1)
+        run_directory = created.pop()
+        quality = json.loads(
+            (run_directory / "quality-review.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(provider.calls, 2)
+        self.assertTrue((run_directory / "response.draft.txt").exists())
+        self.assertTrue(quality["interruption"]["dailyQuota"])
+        self.assertTrue(any(level == "QUOTA" for level, _message in logs))
+        self.assertTrue(any(level == "PAUSED" for level, _message in logs))
+        self.assertFalse(any(level == "ERROR" for level, _message in logs))
+
+    def test_best_effort_gate_exports_draft_when_review_hits_quota(self):
+        class QuotaAfterDraftProvider:
+            def __init__(self):
+                self.calls = 0
+
+            def generate(self, prompt, log=None, on_chunk=None):
+                self.calls += 1
+                if self.calls > 1:
+                    raise ProviderRateLimitError(
+                        "Gemini",
+                        daily_quota=True,
+                        model="gemini-3.6-flash",
+                    )
+                payload = json.loads(MockProvider().generate(prompt, log=log, on_chunk=on_chunk))
+                payload["testCase"]["preconditions"][0] = (
+                    "UserService 서비스 객체가 생성되어 있어야 한다"
+                )
+                return json.dumps(payload, ensure_ascii=False)
+
+        case_directory = TEMP_ROOT / "pipeline-quality-quota-best-effort"
+        settings = deepcopy(load_settings())
+        settings["mockMode"] = False
+        settings["qualityReviewEnabled"] = True
+        settings["qualityReviewPasses"] = 1
+        settings["qualityReviewValidationAttempts"] = 1
+        settings["qualityGateMode"] = "best_effort"
+        settings["templatePath"] = str(PROJECT_ROOT / "templates" / "unittest_template.xlsx")
+        settings["runDirectory"] = str(case_directory / "runs")
+        provider = QuotaAfterDraftProvider()
+        request = AnalysisRequest(
+            project_roots=[FIXTURE_ROOT.resolve()],
+            manual_changes="변경: src/service/UserService.java",
+            request_text="활성 사용자 조회 조건을 변경함",
+            environment="online",
+            include_git=False,
+        )
+        logs = []
+
+        with patch("promptcase_studio.pipeline.create_provider", return_value=provider):
+            result = run_pipeline(
+                request,
+                settings,
+                log=lambda level, message: logs.append((level, message)),
+            )
+
+        quality = json.loads(
+            (result.run_directory / "quality-review.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(provider.calls, 2)
+        self.assertEqual(result.quality_status, "review_required")
+        self.assertTrue(result.document_path.exists())
+        self.assertTrue(quality["interruption"]["dailyQuota"])
+        self.assertTrue(any(level == "QUOTA" for level, _message in logs))
+        self.assertTrue(any(level == "DONE" for level, _message in logs))
+        self.assertFalse(any(level in {"ERROR", "PAUSED"} for level, _message in logs))
+
+    def test_best_effort_gate_exports_valid_draft_when_review_contract_fails(self):
+        class InvalidReviewAfterDraftProvider:
+            def __init__(self):
+                self.calls = 0
+
+            def generate(self, prompt, log=None, on_chunk=None):
+                self.calls += 1
+                payload = json.loads(MockProvider().generate(prompt, log=log, on_chunk=on_chunk))
+                payload["testCase"]["preconditions"][0] = (
+                    "UserService 서비스 객체가 생성되어 있어야 한다"
+                )
+                if self.calls > 1:
+                    payload["testCase"]["procedure"][0] = "저장 버튼 선택"
+                return json.dumps(payload, ensure_ascii=False)
+
+        case_directory = TEMP_ROOT / "pipeline-quality-best-effort"
+        run_root = case_directory / "runs"
+        case_directory.mkdir(parents=True, exist_ok=True)
+        settings = deepcopy(load_settings())
+        settings["mockMode"] = False
+        settings["qualityReviewEnabled"] = True
+        settings["qualityReviewPasses"] = 2
+        settings["qualityReviewValidationAttempts"] = 1
+        settings["qualityGateMode"] = "best_effort"
+        settings["templatePath"] = str(PROJECT_ROOT / "templates" / "unittest_template.xlsx")
+        settings["runDirectory"] = str(run_root)
+        provider = InvalidReviewAfterDraftProvider()
+        request = AnalysisRequest(
+            project_roots=[FIXTURE_ROOT.resolve()],
+            manual_changes="변경: src/service/UserService.java",
+            request_text="활성 사용자 조회 조건을 변경함",
+            environment="online",
+            include_git=False,
+        )
+        logs = []
+
+        with patch("promptcase_studio.pipeline.create_provider", return_value=provider):
+            result = run_pipeline(
+                request,
+                settings,
+                log=lambda level, message: logs.append((level, message)),
+            )
+
+        quality = json.loads(
+            (result.run_directory / "quality-review.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(provider.calls, 2)
+        self.assertEqual(result.quality_status, "review_required")
+        self.assertGreater(result.quality_critical_count, 0)
+        self.assertTrue(result.document_path.exists())
+        self.assertEqual(quality["gateMode"], "best_effort")
+        self.assertTrue(any(level == "WARN" for level, _message in logs))
+        self.assertTrue(any(level == "DONE" for level, _message in logs))
+        self.assertFalse(any(level == "ERROR" for level, _message in logs))
 
     def test_quality_review_retries_when_explicit_user_scenario_is_still_missing(self):
         class ScenarioImprovingProvider:

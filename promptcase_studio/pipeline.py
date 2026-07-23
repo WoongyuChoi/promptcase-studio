@@ -12,10 +12,15 @@ from promptcase_studio.excel_writer import generate_workbook
 from promptcase_studio.models import AnalysisRequest, ChangeItem, ChunkCallback, LogCallback, PipelineResult
 from promptcase_studio.prompt_builder import build_prompt_package
 from promptcase_studio.providers import create_provider
+from promptcase_studio.providers.base import ProviderRateLimitError
 from promptcase_studio.quality import build_quality_report, quality_report_markdown
 from promptcase_studio.response_parser import ResponseValidationError, parse_structured_response
 from promptcase_studio.scanner import build_scan_bundle, write_scan_artifacts
 from promptcase_studio.template_catalog import UNIT_TEST_TEMPLATE
+
+
+class PipelinePausedError(RuntimeError):
+    """The current run is safely preserved and can be retried after an external limit clears."""
 
 
 def _log(callback: LogCallback | None, level: str, message: str) -> None:
@@ -433,6 +438,7 @@ def run_pipeline(
         selected_phase = "draft"
         review_report: dict[str, Any] | None = None
         review_reports: list[dict[str, Any]] = []
+        review_interruption: dict[str, Any] | None = None
         (run_directory / "quality.draft.json").write_text(
             json.dumps(draft_report, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -454,6 +460,12 @@ def run_pipeline(
                 min(int(settings.get("qualityReviewValidationAttempts", 2)), 3),
             )
             review_passes = max(1, min(int(settings.get("qualityReviewPasses", 2)), 3))
+            _log(
+                log,
+                "REVIEW",
+                f"품질 검토 최대 {review_passes}회, 검토별 응답 시도 최대 {review_attempts}회, "
+                f"품질 단계 AI 요청 최대 {review_passes * review_attempts}회",
+            )
             for pass_index in range(1, review_passes + 1):
                 review_prompt = _quality_review_prompt(prompt, response_text, selected_report)
                 if pass_index > 1:
@@ -490,11 +502,21 @@ def run_pipeline(
                         log,
                         on_chunk,
                     )
+                except ProviderRateLimitError as exc:
+                    review_interruption = exc.to_dict()
+                    _log(
+                        log,
+                        "QUOTA",
+                        "AI 품질 검토를 중단했습니다. 초안 응답과 품질 진단은 현재 실행 폴더에 "
+                        f"보존했습니다. {exc}",
+                    )
+                    break
                 except ResponseValidationError as exc:
                     _log(
                         log,
                         "WARN",
-                        f"품질 검토 응답이 계약을 통과하지 못해 현재 최선의 문안을 유지합니다: {exc}",
+                        f"품질 검토 응답이 {review_attempts}회의 생성 시도 후에도 계약을 통과하지 "
+                        f"못해 현재 최선의 문안을 유지하고 후속 검토를 종료합니다: {exc}",
                     )
                     break
 
@@ -536,17 +558,38 @@ def run_pipeline(
             "review": review_report,
             "reviews": review_reports,
             "selectedReport": selected_report,
+            "interruption": review_interruption,
+            "gateMode": str(settings.get("qualityGateMode", "best_effort")),
         }
         (run_directory / "quality-review.json").write_text(
             json.dumps(quality_summary, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         critical_issues = _critical_quality_issue_count(selected_report)
+        quality_gate_mode = str(settings.get("qualityGateMode", "best_effort")).strip()
+        strict_quality_gate = quality_gate_mode == "strict"
+        quality_status = "review_required" if critical_issues else "pass"
         if critical_issues:
-            raise ResponseValidationError(
-                f"최종 문안에 사용자 의뢰 누락 또는 실행 품질 문제가 {critical_issues}건 남아 "
-                "Excel 다운로드를 활성화하지 않습니다. AI 품질 검토가 꺼져 있다면 환경설정에서 켜 주세요."
+            if review_interruption and strict_quality_gate:
+                raise PipelinePausedError(
+                    f"초안 생성은 완료되었지만 필수 품질 문제 {critical_issues}건을 교정하기 전 "
+                    f"AI 사용량 한도에 도달했습니다. {review_interruption['message']} "
+                    f"초안과 품질 진단은 {run_directory}에 보존했습니다."
+                )
+            if strict_quality_gate:
+                raise ResponseValidationError(
+                    f"최종 문안에 사용자 의뢰 누락 또는 실행 품질 문제가 {critical_issues}건 남아 "
+                    "엄격한 품질 정책에 따라 Excel 다운로드를 활성화하지 않습니다."
+                )
+            _log(
+                log,
+                "WARN",
+                f"필수 품질 검토 항목 {critical_issues}건이 남았지만 현재 최선의 계약 검증본으로 "
+                "Excel 초안을 생성합니다. 다운로드 후 품질 진단을 참고해 검토해 주세요.",
             )
+    except PipelinePausedError as exc:
+        _log(log, "PAUSED", str(exc))
+        raise
     except Exception as exc:
         _log(log, "ERROR", f"AI 응답 생성 또는 검증 실패: {exc}")
         raise
@@ -574,5 +617,17 @@ def run_pipeline(
         raise
     _log(log, "EXCEL", "Excel ZIP, worksheet, namespace 무결성 검증 완료")
     _log(log, "ARTIFACT", f"실행 근거 저장 위치: {run_directory}")
-    _log(log, "DONE", f"분석 완료, 테스트케이스 다운로드 가능: {suggested_filename}")
-    return PipelineResult(run_id, run_directory, document_path, suggested_filename, response_path, bundle)
+    completion = "검토 필요 초안" if quality_status == "review_required" else "검증 완료 초안"
+    _log(log, "DONE", f"분석 완료, {completion} 다운로드 가능: {suggested_filename}")
+    return PipelineResult(
+        run_id=run_id,
+        run_directory=run_directory,
+        document_path=document_path,
+        suggested_filename=suggested_filename,
+        response_path=response_path,
+        scan_bundle=bundle,
+        quality_status=quality_status,
+        quality_score=int(selected_report.get("score", 0)),
+        quality_issue_count=len(selected_report.get("issues", [])),
+        quality_critical_count=critical_issues,
+    )

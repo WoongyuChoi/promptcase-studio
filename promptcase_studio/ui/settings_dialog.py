@@ -6,6 +6,7 @@ from typing import Any
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -26,6 +27,13 @@ from promptcase_studio.config import (
     resolve_project_path,
     save_dotenv_secret,
     save_local_settings,
+)
+from promptcase_studio.gemini_models import (
+    AUTO_GEMINI_MODEL,
+    DEFAULT_GEMINI_FALLBACK_MODELS,
+    GEMINI_TEXT_MODELS,
+    gemini_model_sequence,
+    normalize_gemini_model_id,
 )
 
 
@@ -85,7 +93,7 @@ class SettingsDialog(QDialog):
         self.mock_checkbox.setChecked(bool(self.settings.get("mockMode", False)))
         mock_hint = QLabel("외부 API를 호출하지 않고 예제 응답으로 전체 흐름을 검증합니다.")
         mock_hint.setObjectName("sectionHint")
-        self.quality_review_checkbox = QCheckBox("2차 품질 검토")
+        self.quality_review_checkbox = QCheckBox("AI 품질 검토")
         self.quality_review_checkbox.setChecked(
             bool(self.settings.get("qualityReviewEnabled", True))
         )
@@ -93,6 +101,46 @@ class SettingsDialog(QDialog):
             "형식 검증을 통과한 초안을 다시 검토해 누락된 분기와 어색한 문장을 보완합니다."
         )
         quality_hint.setObjectName("sectionHint")
+        quality_count_row = QHBoxLayout()
+        quality_count_label = QLabel("품질 검토 횟수")
+        quality_count_label.setObjectName("fieldLabel")
+        self.quality_review_passes = QSpinBox()
+        self.quality_review_passes.setRange(1, 3)
+        self.quality_review_passes.setSuffix(" 회")
+        self.quality_review_passes.setValue(int(self.settings.get("qualityReviewPasses", 2)))
+        review_validation_label = QLabel("검토 응답 시도")
+        review_validation_label.setObjectName("fieldLabel")
+        self.quality_review_validation_attempts = QSpinBox()
+        self.quality_review_validation_attempts.setRange(1, 3)
+        self.quality_review_validation_attempts.setSuffix(" 회")
+        self.quality_review_validation_attempts.setValue(
+            int(self.settings.get("qualityReviewValidationAttempts", 2))
+        )
+        quality_count_row.addWidget(quality_count_label)
+        quality_count_row.addWidget(self.quality_review_passes)
+        quality_count_row.addSpacing(14)
+        quality_count_row.addWidget(review_validation_label)
+        quality_count_row.addWidget(self.quality_review_validation_attempts)
+        quality_count_row.addStretch(1)
+        self.quality_request_hint = QLabel()
+        self.quality_request_hint.setObjectName("sectionHint")
+        self.quality_review_passes.valueChanged.connect(self._update_quality_request_hint)
+        self.quality_review_validation_attempts.valueChanged.connect(
+            self._update_quality_request_hint
+        )
+        self._update_quality_request_hint()
+        quality_gate_row = QHBoxLayout()
+        quality_gate_label = QLabel("완료 정책")
+        quality_gate_label.setObjectName("fieldLabel")
+        self.quality_gate_mode = QComboBox()
+        self.quality_gate_mode.addItem("최선본 다운로드 허용", "best_effort")
+        self.quality_gate_mode.addItem("필수 품질 문제 시 다운로드 차단", "strict")
+        gate_index = self.quality_gate_mode.findData(
+            str(self.settings.get("qualityGateMode", "best_effort"))
+        )
+        self.quality_gate_mode.setCurrentIndex(max(0, gate_index))
+        quality_gate_row.addWidget(quality_gate_label)
+        quality_gate_row.addWidget(self.quality_gate_mode, 1)
         validation_row = QHBoxLayout()
         validation_label = QLabel("응답 형식 검증")
         validation_label.setObjectName("fieldLabel")
@@ -114,11 +162,23 @@ class SettingsDialog(QDialog):
         layout.addSpacing(5)
         layout.addWidget(self.quality_review_checkbox)
         layout.addWidget(quality_hint)
-        layout.addSpacing(5)
+        layout.addLayout(quality_count_row)
+        layout.addWidget(self.quality_request_hint)
+        layout.addLayout(quality_gate_row)
+        layout.addSpacing(3)
         layout.addLayout(validation_row)
         layout.addWidget(validation_hint)
         layout.addStretch(1)
         return widget
+
+    def _update_quality_request_hint(self) -> None:
+        maximum = (
+            self.quality_review_passes.value()
+            * self.quality_review_validation_attempts.value()
+        )
+        self.quality_request_hint.setText(
+            f"품질 검토 단계에서 최대 {maximum}회의 AI 응답 생성을 시도합니다."
+        )
 
     def _build_online_tab(self) -> QWidget:
         widget = QWidget()
@@ -129,7 +189,27 @@ class SettingsDialog(QDialog):
         form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
         online = self.settings.get("providers", {}).get("online", {})
         self.gemini_base = QLineEdit(str(online.get("apiBase", "")))
-        self.gemini_model = QLineEdit(str(online.get("model", "gemini-flash-latest")))
+        self.gemini_model = QComboBox()
+        self.gemini_model.addItem("Auto", AUTO_GEMINI_MODEL)
+        for model in GEMINI_TEXT_MODELS:
+            self.gemini_model.addItem(model.choice_label, model.model_id)
+        selected_model = normalize_gemini_model_id(online.get("model", AUTO_GEMINI_MODEL))
+        selected_index = self.gemini_model.findData(selected_model)
+        if selected_index < 0:
+            self.gemini_model.addItem(selected_model, selected_model)
+            selected_index = self.gemini_model.count() - 1
+        self.gemini_model.setCurrentIndex(selected_index)
+        self.gemini_fallback_models = tuple(
+            gemini_model_sequence(
+                AUTO_GEMINI_MODEL,
+                online.get("fallbackModels", DEFAULT_GEMINI_FALLBACK_MODELS),
+            )[1:]
+        )
+        self.gemini_fallback_hint = QLabel()
+        self.gemini_fallback_hint.setWordWrap(True)
+        self.gemini_fallback_hint.setObjectName("sectionHint")
+        self.gemini_model.currentIndexChanged.connect(self._update_gemini_fallback_hint)
+        self._update_gemini_fallback_hint()
         self.gemini_key = QLineEdit(get_secret(str(online.get("apiKeyEnv", "GEMINI_API_KEY"))))
         self.gemini_key.setEchoMode(QLineEdit.Normal)
         self.gemini_key.setPlaceholderText("Google AI Studio에서 발급한 API 키")
@@ -147,7 +227,8 @@ class SettingsDialog(QDialog):
         self.gemini_output_tokens.setSuffix(" 토큰")
         self.gemini_output_tokens.setValue(int(online.get("maxOutputTokens", 32768)))
         form.addRow("API 주소", self.gemini_base)
-        form.addRow("모델", self.gemini_model)
+        form.addRow("Gemini 모델", self.gemini_model)
+        form.addRow("", self.gemini_fallback_hint)
         form.addRow("API Key", self.gemini_key)
         form.addRow("응답 대기", self.gemini_timeout)
         form.addRow("최대 호출", self.gemini_attempts)
@@ -157,6 +238,25 @@ class SettingsDialog(QDialog):
         hint.setObjectName("sectionHint")
         form.addRow("", hint)
         return widget
+
+    def _selected_gemini_model(self) -> str:
+        return normalize_gemini_model_id(self.gemini_model.currentData())
+
+    def _update_gemini_fallback_hint(self) -> None:
+        primary = self._selected_gemini_model()
+        if primary == AUTO_GEMINI_MODEL:
+            sequence = "  →  ".join(
+                gemini_model_sequence(primary, self.gemini_fallback_models)
+            )
+            message = (
+                f"자동 전환 순서  {sequence}\n"
+                "모델별 요청 한도가 재시도 후에도 지속되면 다음 모델로 전환합니다."
+            )
+        else:
+            message = f"{primary} 모델만 고정 사용하며 다른 모델로 자동 전환하지 않습니다."
+        self.gemini_fallback_hint.setText(
+            message + " 무료 한도는 Google AI Studio에서 확인합니다."
+        )
 
     def _build_secure_tab(self) -> QWidget:
         widget = QWidget()
@@ -217,11 +317,14 @@ class SettingsDialog(QDialog):
             "defaultEnvironment": "online" if self.online_radio.isChecked() else "secure",
             "mockMode": self.mock_checkbox.isChecked(),
             "qualityReviewEnabled": self.quality_review_checkbox.isChecked(),
+            "qualityReviewPasses": self.quality_review_passes.value(),
+            "qualityReviewValidationAttempts": self.quality_review_validation_attempts.value(),
+            "qualityGateMode": str(self.quality_gate_mode.currentData()),
             "responseValidationAttempts": self.validation_attempts.value(),
             "providers": {
                 "online": {
                     "apiBase": self.gemini_base.text().strip(),
-                    "model": self.gemini_model.text().strip(),
+                    "model": self._selected_gemini_model(),
                     "apiKeyEnv": "GEMINI_API_KEY",
                     "timeoutSeconds": self.gemini_timeout.value(),
                     "maxAttempts": self.gemini_attempts.value(),

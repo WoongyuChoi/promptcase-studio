@@ -8,7 +8,7 @@ from typing import Any
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from promptcase_studio.models import AnalysisRequest, ChangeItem
-from promptcase_studio.pipeline import run_pipeline
+from promptcase_studio.pipeline import PipelinePausedError, run_pipeline
 from promptcase_studio.scanner import collect_git_changes
 
 
@@ -37,6 +37,8 @@ class PipelineWorker(QThread):
                 on_chunk=self.response_chunk.emit,
             )
             self.completed.emit(result)
+        except PipelinePausedError as exc:
+            self.failed.emit(str(exc))
         except Exception as exc:  # GUI 경계에서 traceback을 run console에 남긴다.
             self.log_message.emit("ERROR", str(exc))
             self.log_message.emit("TRACE", traceback.format_exc())

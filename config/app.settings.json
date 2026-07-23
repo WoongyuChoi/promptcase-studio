@@ -9,11 +9,17 @@
   "qualityReviewEnabled": true,
   "qualityReviewPasses": 2,
   "qualityReviewValidationAttempts": 2,
+  "qualityGateMode": "best_effort",
   "providers": {
     "online": {
       "type": "gemini",
       "apiBase": "https://generativelanguage.googleapis.com/v1beta",
-      "model": "gemini-flash-latest",
+      "model": "auto",
+      "fallbackModels": [
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite"
+      ],
       "apiKeyEnv": "GEMINI_API_KEY",
       "timeoutSeconds": 300,
       "maxAttempts": 3,

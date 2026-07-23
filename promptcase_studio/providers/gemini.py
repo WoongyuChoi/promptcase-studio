@@ -8,18 +8,39 @@ from promptcase_studio.models import ChunkCallback, LogCallback
 from promptcase_studio.providers.base import (
     GenerationDiagnostics,
     ProviderError,
+    ProviderRateLimitError,
     TextGenerationProvider,
     log_generation_diagnostics,
     open_with_retry,
     split_prompt_sections,
     token_count,
 )
+from promptcase_studio.gemini_models import (
+    AUTO_GEMINI_MODEL,
+    DEFAULT_GEMINI_FALLBACK_MODELS,
+    DEFAULT_GEMINI_MODEL,
+    gemini_model_sequence,
+    normalize_gemini_model_id,
+)
 
 
 class GeminiProvider(TextGenerationProvider):
     def __init__(self, config: dict[str, Any], api_key: str):
         self.api_base = str(config.get("apiBase", "")).rstrip("/")
-        self.model = str(config.get("model", "gemini-flash-latest"))
+        selected_model = normalize_gemini_model_id(config.get("model", AUTO_GEMINI_MODEL))
+        legacy_auto = config.get("fallbackOnDailyQuota") is True
+        self.auto_model_selection = selected_model == AUTO_GEMINI_MODEL or legacy_auto
+        if self.auto_model_selection:
+            self.models = gemini_model_sequence(
+                selected_model,
+                config.get("fallbackModels", DEFAULT_GEMINI_FALLBACK_MODELS),
+            )
+        else:
+            self.models = (selected_model,)
+        self.model = self.models[0] if self.models else DEFAULT_GEMINI_MODEL
+        self.fallback_on_daily_quota = self.auto_model_selection
+        self._active_model_index = 0
+        self._rate_limited_models: set[str] = set()
         self.timeout = int(config.get("timeoutSeconds", 300))
         self.max_attempts = int(config.get("maxAttempts", 3))
         self.retry_delay_seconds = float(config.get("retryDelaySeconds", 2))
@@ -82,10 +103,56 @@ class GeminiProvider(TextGenerationProvider):
         self.last_diagnostics = None
         if not self.api_key:
             raise ProviderError("GEMINI_API_KEY가 없습니다. 환경설정 또는 .env를 확인해 주세요.")
-        url = f"{self.api_base}/models/{self.model}:generateContent"
+        last_quota_error: ProviderRateLimitError | None = None
+        for model_index in range(self._active_model_index, len(self.models)):
+            model = self.models[model_index]
+            if model in self._rate_limited_models:
+                continue
+            try:
+                result = self._generate_with_model(model, prompt, log, on_chunk)
+            except ProviderRateLimitError as exc:
+                if not self.fallback_on_daily_quota:
+                    raise
+                self._rate_limited_models.add(model)
+                last_quota_error = exc
+                next_model = next(
+                    (
+                        candidate
+                        for candidate in self.models[model_index + 1 :]
+                        if candidate not in self._rate_limited_models
+                    ),
+                    None,
+                )
+                if not next_model:
+                    break
+                if log:
+                    reason = "일일 한도 소진" if exc.daily_quota else "요청 한도 재시도 소진"
+                    log(
+                        "FALLBACK",
+                        f"Gemini {model} {reason}, 다음 안정 모델 {next_model}로 전환",
+                    )
+                continue
+            self._active_model_index = model_index
+            self.model = model
+            return result
+
+        if last_quota_error is not None:
+            if log:
+                exhausted = ", ".join(self._rate_limited_models)
+                log("QUOTA", f"Gemini 자동 대체 모델의 요청 한도까지 소진됨: {exhausted}")
+            raise last_quota_error
+        raise ProviderError("사용 가능한 Gemini 텍스트 출력 모델이 없습니다.")
+
+    def _generate_with_model(
+        self,
+        model: str,
+        prompt: str,
+        log: LogCallback | None,
+        on_chunk: ChunkCallback | None,
+    ) -> str:
+        url = f"{self.api_base}/models/{model}:generateContent"
         system_prompt, user_prompt = split_prompt_sections(prompt)
         generation_config: dict[str, Any] = {
-            "temperature": 0.2,
             "responseMimeType": "application/json",
         }
         if self.max_output_tokens > 0:
@@ -96,7 +163,7 @@ class GeminiProvider(TextGenerationProvider):
             "generationConfig": generation_config,
         }
         if log:
-            log("API", f"Gemini {self.model}에 {len(prompt):,}자 프롬프트 전송")
+            log("API", f"Gemini {model}에 {len(prompt):,}자 프롬프트 전송")
         request = urllib.request.Request(
             url,
             data=json.dumps(body, ensure_ascii=False).encode("utf-8"),

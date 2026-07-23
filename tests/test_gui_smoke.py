@@ -71,6 +71,20 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertIsNone(window.worker)
         window.close()
 
+    def test_daily_quota_failure_uses_actionable_warning_dialog(self):
+        window = MainWindow()
+        message = "Gemini 무료 등급 모델의 일일 요청 한도를 모두 사용했습니다."
+
+        with (
+            patch.object(QMessageBox, "warning") as warning,
+            patch.object(QMessageBox, "critical") as critical,
+        ):
+            window._pipeline_failed(message)
+
+        warning.assert_called_once_with(window, "AI 사용량 한도 도달", message)
+        critical.assert_not_called()
+        window.close()
+
     def test_disabling_modified_date_range_returns_open_range(self):
         window = MainWindow()
         window.date_checkbox.setChecked(False)
@@ -210,6 +224,37 @@ class GuiSmokeTests(unittest.TestCase):
         information.assert_not_called()
         window.close()
 
+    def test_review_required_result_still_enables_download_with_warning(self):
+        project_root = Path(__file__).resolve().parent.parent
+        source = project_root / "templates" / "unittest_template.xlsx"
+        result = PipelineResult(
+            run_id="review-required",
+            run_directory=source.parent,
+            document_path=source,
+            suggested_filename="검토필요_단위테스트.xlsx",
+            response_path=source,
+            scan_bundle=ScanBundle(),
+            quality_status="review_required",
+            quality_score=53,
+            quality_issue_count=5,
+            quality_critical_count=4,
+        )
+        window = MainWindow()
+        window._active_request_revision = window._input_revision
+
+        with (
+            patch.object(QMessageBox, "warning") as warning,
+            patch.object(QMessageBox, "information") as information,
+        ):
+            window._pipeline_completed(result)
+
+        self.assertIs(window.last_result, result)
+        self.assertTrue(window.download_button.isEnabled())
+        warning.assert_called_once()
+        self.assertIn("필수 검토 항목 4건", warning.call_args.args[2])
+        information.assert_not_called()
+        window.close()
+
     def test_control_panel_fits_at_reference_resolution(self):
         window = MainWindow()
         window.resize(1500, 900)
@@ -228,10 +273,18 @@ class GuiSmokeTests(unittest.TestCase):
 
     def test_settings_dialog_constructs(self):
         window = MainWindow()
+        window.settings["qualityReviewPasses"] = 2
+        window.settings["qualityReviewValidationAttempts"] = 2
+        window.settings["qualityGateMode"] = "best_effort"
         dialog = SettingsDialog(window.settings, window)
         self.assertEqual(dialog.windowTitle(), "Promptcase Studio 환경설정")
         self.assertEqual(dialog.qwen_settings_path.text(), "config/qwen.settings.json")
         self.assertEqual(dialog.gemini_timeout.value(), 300)
+        self.assertEqual(dialog.gemini_model.currentData(), "auto")
+        self.assertEqual(dialog.gemini_model.count(), 5)
+        self.assertEqual(dialog.gemini_model.itemText(0), "Auto")
+        self.assertEqual(dialog.gemini_model.itemText(1), "Gemini 3.6 Flash")
+        self.assertIn("gemini-3.5-flash-lite", dialog.gemini_fallback_hint.text())
         self.assertEqual(dialog.gemini_attempts.value(), 3)
         self.assertEqual(dialog.gemini_output_tokens.value(), 32768)
         self.assertEqual(dialog.gemini_key.echoMode(), QLineEdit.Normal)
@@ -240,13 +293,23 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(dialog.qwen_output_tokens.value(), 32768)
         self.assertEqual(dialog.validation_attempts.value(), 3)
         self.assertTrue(dialog.quality_review_checkbox.isChecked())
+        self.assertEqual(dialog.quality_review_passes.value(), 2)
+        self.assertEqual(dialog.quality_review_validation_attempts.value(), 2)
+        self.assertEqual(dialog.quality_gate_mode.currentData(), "best_effort")
+        self.assertIn("최대 4회", dialog.quality_request_hint.text())
         dialog.close()
         window.close()
 
     def test_settings_dialog_saves_only_user_editable_local_overrides(self):
         window = MainWindow()
+        window.settings["qualityReviewPasses"] = 2
+        window.settings["qualityReviewValidationAttempts"] = 2
+        window.settings["qualityGateMode"] = "best_effort"
         dialog = SettingsDialog(window.settings, window)
         dialog.gemini_attempts.setValue(4)
+        dialog.gemini_model.setCurrentIndex(
+            dialog.gemini_model.findData("gemini-3.5-flash-lite")
+        )
 
         with (
             patch("promptcase_studio.ui.settings_dialog.save_dotenv_secret"),
@@ -261,6 +324,9 @@ class GuiSmokeTests(unittest.TestCase):
                 "defaultEnvironment",
                 "mockMode",
                 "qualityReviewEnabled",
+                "qualityReviewPasses",
+                "qualityReviewValidationAttempts",
+                "qualityGateMode",
                 "responseValidationAttempts",
                 "providers",
             },
@@ -268,6 +334,11 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertNotIn("scanner", saved)
         self.assertNotIn("templatePath", saved)
         self.assertEqual(saved["providers"]["online"]["maxAttempts"], 4)
+        self.assertEqual(saved["providers"]["online"]["model"], "gemini-3.5-flash-lite")
+        self.assertEqual(saved["qualityReviewPasses"], 2)
+        self.assertEqual(saved["qualityReviewValidationAttempts"], 2)
+        self.assertEqual(saved["qualityGateMode"], "best_effort")
+        self.assertNotIn("fallbackOnDailyQuota", saved["providers"]["online"])
         self.assertNotIn("retryDelaySeconds", saved["providers"]["online"])
         self.assertNotIn("type", saved["providers"]["online"])
         self.assertNotIn("retryDelaySeconds", saved["providers"]["secure"])
