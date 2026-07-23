@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -37,6 +38,7 @@ from promptcase_studio.gemini_models import (
     gemini_model_sequence,
     normalize_gemini_model_id,
 )
+from promptcase_studio.ui.tooltip import HelpTooltipButton
 
 
 class StepperSpinBox(QSpinBox):
@@ -87,76 +89,160 @@ class StepperSpinBox(QSpinBox):
 class SettingsDialog(QDialog):
     def __init__(self, settings: dict[str, Any], parent=None):
         super().__init__(parent)
+        self.setObjectName("settingsDialog")
         self.settings = deepcopy(settings)
         self.setWindowTitle("Promptcase Studio 환경설정")
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.resize(800, 580)
         self.setMinimumSize(720, 540)
         self.setModal(True)
+        self.help_buttons: list[HelpTooltipButton] = []
 
-        title = QLabel("연결 및 실행 설정")
+        title = QLabel("환경설정")
         title.setObjectName("dialogTitle")
         subtitle = QLabel("AI 연결, 응답 제한과 문서 품질 정책을 관리합니다.")
         subtitle.setObjectName("dialogSubtitle")
 
-        tabs = QTabWidget()
-        tabs.addTab(self._build_general_tab(), "기본")
-        tabs.addTab(self._build_secure_tab(), "폐쇄망(Qwen)")
-        tabs.addTab(self._build_online_tab(), "온라인(Gemini)")
+        self.tabs = QTabWidget(self)
+        self.tabs.setObjectName("settingsTabs")
+        self.tabs.addTab(self._build_general_tab(), "기본")
+        self.tabs.addTab(self._build_secure_tab(), "폐쇄망(Qwen)")
+        self.tabs.addTab(self._build_online_tab(), "온라인(Gemini)")
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        buttons.button(QDialogButtonBox.Save).setText("저장")
-        buttons.button(QDialogButtonBox.Cancel).setText("취소")
-        buttons.accepted.connect(self._save)
-        buttons.rejected.connect(self.reject)
+        for field in self.findChildren(QLineEdit):
+            if isinstance(field.parentWidget(), QSpinBox):
+                continue
+            field.setFixedHeight(32)
+        for field in self.findChildren(QComboBox):
+            field.setFixedHeight(34)
+
+        self.button_box = QDialogButtonBox(
+            QDialogButtonBox.Save | QDialogButtonBox.Cancel
+        )
+        self.button_box.setObjectName("settingsButtonBox")
+        self.save_button = self.button_box.button(QDialogButtonBox.Save)
+        self.save_button.setText("저장")
+        self.save_button.setObjectName("dialogPrimaryButton")
+        self.save_button.setFixedSize(88, 32)
+        self.cancel_button = self.button_box.button(QDialogButtonBox.Cancel)
+        self.cancel_button.setText("취소")
+        self.cancel_button.setObjectName("dialogSecondaryButton")
+        self.cancel_button.setFixedSize(72, 32)
+        self.button_box.accepted.connect(self._save)
+        self.button_box.rejected.connect(self.reject)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setContentsMargins(20, 18, 20, 16)
         layout.setSpacing(8)
         layout.addWidget(title)
         layout.addWidget(subtitle)
         layout.addSpacing(2)
-        layout.addWidget(tabs, 1)
-        layout.addWidget(buttons)
+        layout.addWidget(self.tabs, 1)
+        layout.addSpacing(2)
+        layout.addWidget(self.button_box)
+
+    def _help_button(self, title: str, body: str) -> HelpTooltipButton:
+        button = HelpTooltipButton(title, body)
+        self.help_buttons.append(button)
+        return button
+
+    def _settings_section(
+        self,
+        title: str,
+        *,
+        object_name: str = "settingsSection",
+        help_title: str = "",
+        help_body: str = "",
+    ) -> tuple[QFrame, QVBoxLayout]:
+        frame = QFrame()
+        frame.setObjectName(object_name)
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(9)
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(6)
+        label = QLabel(title)
+        label.setObjectName("settingsSectionTitle")
+        header.addWidget(label)
+        if help_body:
+            header.addWidget(self._help_button(help_title or title, help_body))
+        header.addStretch(1)
+        layout.addLayout(header)
+        return frame, layout
+
+    def _information_section(self, title: str, body: str) -> QFrame:
+        frame, layout = self._settings_section(
+            title,
+            object_name="settingsInfoSection",
+        )
+        message = QLabel(body)
+        message.setObjectName("settingsInfoText")
+        message.setWordWrap(True)
+        layout.addWidget(message)
+        return frame
 
     def _build_general_tab(self) -> QWidget:
         widget = QWidget()
+        widget.setObjectName("settingsPage")
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(9)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
 
-        label = QLabel("기본 연결 환경")
-        label.setObjectName("fieldLabel")
+        connection_section, connection_layout = self._settings_section(
+            "1. 기본 연결 환경",
+            help_title="기본 연결 환경",
+            help_body="프로그램을 열었을 때 기본으로 사용할 AI 연결 환경을 선택합니다.",
+        )
         self.secure_radio = QRadioButton("폐쇄망(Qwen)")
         self.online_radio = QRadioButton("온라인(Gemini)")
         default_environment = self.settings.get("defaultEnvironment", "secure")
         self.online_radio.setChecked(default_environment == "online")
         self.secure_radio.setChecked(default_environment == "secure")
         radio_row = QHBoxLayout()
+        radio_row.setSpacing(8)
         radio_row.addWidget(self.secure_radio)
         radio_row.addWidget(self.online_radio)
         radio_row.addStretch(1)
 
         self.mock_checkbox = QCheckBox("Mock 모드")
         self.mock_checkbox.setChecked(bool(self.settings.get("mockMode", False)))
-        mock_hint = QLabel("외부 API 없이 예제 응답으로 실행 흐름을 확인합니다")
-        mock_hint.setObjectName("sectionHint")
         mock_row = QHBoxLayout()
+        mock_row.setSpacing(6)
         mock_row.addWidget(self.mock_checkbox)
-        mock_row.addWidget(mock_hint)
+        mock_row.addWidget(
+            self._help_button(
+                "Mock 모드",
+                "외부 API 없이 예제 응답으로 스캔부터 Excel 생성까지 실행 흐름을 확인합니다.",
+            )
+        )
         mock_row.addStretch(1)
-        quality_section = QLabel("문서 품질")
-        quality_section.setObjectName("settingsGroupTitle")
+
+        connection_layout.addLayout(radio_row)
+        connection_layout.addLayout(mock_row)
+
+        quality_section, quality_layout = self._settings_section(
+            "2. 문서 품질",
+            help_title="문서 품질",
+            help_body="응답 검증과 품질 검토 횟수, 문서 완료 정책을 설정합니다.",
+        )
         self.quality_review_checkbox = QCheckBox("AI 품질 검토")
         self.quality_review_checkbox.setChecked(
             bool(self.settings.get("qualityReviewEnabled", True))
         )
-        quality_hint = QLabel("초안의 누락된 분기와 어색한 문장을 다시 검토합니다")
-        quality_hint.setObjectName("sectionHint")
         quality_toggle_row = QHBoxLayout()
+        quality_toggle_row.setSpacing(6)
         quality_toggle_row.addWidget(self.quality_review_checkbox)
-        quality_toggle_row.addWidget(quality_hint)
+        quality_toggle_row.addWidget(
+            self._help_button(
+                "AI 품질 검토",
+                "초안의 누락된 변경 분기, 중복 문장과 어색한 표현을 별도 AI 요청으로 다시 검토합니다.",
+            )
+        )
         quality_toggle_row.addStretch(1)
+
         quality_count_row = QHBoxLayout()
+        quality_count_row.setSpacing(8)
         quality_count_label = QLabel("품질 검토 횟수")
         quality_count_label.setObjectName("fieldLabel")
         self.quality_review_passes = StepperSpinBox()
@@ -176,28 +262,43 @@ class SettingsDialog(QDialog):
         quality_count_row.addSpacing(14)
         quality_count_row.addWidget(review_validation_label)
         quality_count_row.addWidget(self.quality_review_validation_attempts)
+        self.quality_request_help = self._help_button(
+            "AI 응답 시도 횟수",
+            "",
+        )
+        quality_count_row.addWidget(self.quality_request_help)
         quality_count_row.addStretch(1)
-        self.quality_request_hint = QLabel()
-        self.quality_request_hint.setObjectName("sectionHint")
         self.quality_review_passes.valueChanged.connect(self._update_quality_request_hint)
         self.quality_review_validation_attempts.valueChanged.connect(
             self._update_quality_request_hint
         )
         self._update_quality_request_hint()
+
         quality_gate_row = QHBoxLayout()
+        quality_gate_row.setSpacing(8)
         quality_gate_label = QLabel("완료 정책")
         quality_gate_label.setObjectName("fieldLabel")
         self.quality_gate_mode = QComboBox()
         self.quality_gate_mode.addItem("최선본 다운로드 허용", "best_effort")
         self.quality_gate_mode.addItem("필수 품질 문제 시 다운로드 차단", "strict")
-        self.quality_gate_mode.setMaximumWidth(420)
+        self.quality_gate_mode.setFixedWidth(340)
+        self.quality_gate_mode.view().setMinimumHeight(52)
         gate_index = self.quality_gate_mode.findData(
             str(self.settings.get("qualityGateMode", "best_effort"))
         )
         self.quality_gate_mode.setCurrentIndex(max(0, gate_index))
         quality_gate_row.addWidget(quality_gate_label)
-        quality_gate_row.addWidget(self.quality_gate_mode, 1)
+        quality_gate_row.addWidget(self.quality_gate_mode)
+        quality_gate_row.addWidget(
+            self._help_button(
+                "완료 정책",
+                "최선본 허용은 품질 경고가 남아도 다운로드할 수 있습니다. 엄격한 정책은 필수 품질 문제가 남으면 다운로드를 차단합니다.",
+            )
+        )
+        quality_gate_row.addStretch(1)
+
         validation_row = QHBoxLayout()
+        validation_row.setSpacing(8)
         validation_label = QLabel("응답 형식 검증")
         validation_label.setObjectName("fieldLabel")
         self.validation_attempts = StepperSpinBox()
@@ -206,21 +307,21 @@ class SettingsDialog(QDialog):
         self.validation_attempts.setValue(int(self.settings.get("responseValidationAttempts", 3)))
         validation_row.addWidget(validation_label)
         validation_row.addWidget(self.validation_attempts)
-        validation_note = QLabel("계약 오류가 있으면 수정 요청")
-        validation_note.setObjectName("sectionHint")
-        validation_row.addWidget(validation_note)
+        validation_row.addWidget(
+            self._help_button(
+                "응답 형식 검증",
+                "JSON 계약 오류가 있으면 검증 오류를 전달해 응답 수정을 다시 요청합니다.",
+            )
+        )
         validation_row.addStretch(1)
 
-        layout.addWidget(label)
-        layout.addLayout(radio_row)
-        layout.addLayout(mock_row)
-        layout.addSpacing(3)
+        quality_layout.addLayout(quality_toggle_row)
+        quality_layout.addLayout(quality_count_row)
+        quality_layout.addLayout(quality_gate_row)
+        quality_layout.addLayout(validation_row)
+
+        layout.addWidget(connection_section)
         layout.addWidget(quality_section)
-        layout.addLayout(quality_toggle_row)
-        layout.addLayout(quality_count_row)
-        layout.addWidget(self.quality_request_hint)
-        layout.addLayout(quality_gate_row)
-        layout.addLayout(validation_row)
         layout.addStretch(1)
         return widget
 
@@ -229,23 +330,42 @@ class SettingsDialog(QDialog):
             self.quality_review_passes.value()
             * self.quality_review_validation_attempts.value()
         )
-        self.quality_request_hint.setText(
-            f"품질 검토 단계에서 최대 {maximum}회의 AI 응답 생성을 시도합니다."
+        self.quality_request_help.set_help_content(
+            "AI 응답 시도 횟수",
+            f"품질 검토 단계에서 최대 {maximum}회의 AI 응답 생성을 시도합니다. "
+            "품질 검토 횟수와 검토 응답 시도 횟수를 곱한 값입니다.",
         )
 
     def _build_online_tab(self) -> QWidget:
         widget = QWidget()
-        form = QFormLayout(widget)
-        form.setContentsMargins(20, 18, 20, 18)
+        widget.setObjectName("settingsPage")
+        page_layout = QVBoxLayout(widget)
+        page_layout.setContentsMargins(16, 14, 16, 14)
+        page_layout.setSpacing(10)
+
+        page_layout.addWidget(
+            self._information_section(
+                "Gemini 연결 안내",
+                "API 키는 현재 PC의 .env에 저장되며 Git 커밋에서 자동 제외됩니다.",
+            )
+        )
+        settings_section, settings_layout = self._settings_section("연결 설정")
+        form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
         form.setHorizontalSpacing(16)
         form.setVerticalSpacing(9)
         form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
         online = self.settings.get("providers", {}).get("online", {})
         self.gemini_base = QLineEdit(str(online.get("apiBase", "")))
         self.gemini_model = QComboBox()
+        self.gemini_model.setFixedWidth(280)
         self.gemini_model.addItem("Auto", AUTO_GEMINI_MODEL)
         for model in GEMINI_TEXT_MODELS:
             self.gemini_model.addItem(model.choice_label, model.model_id)
+        self.gemini_model.setMaxVisibleItems(self.gemini_model.count())
+        self.gemini_model.view().setMinimumHeight(
+            min(180, self.gemini_model.count() * 24 + 8)
+        )
         selected_model = normalize_gemini_model_id(online.get("model", AUTO_GEMINI_MODEL))
         selected_index = self.gemini_model.findData(selected_model)
         if selected_index < 0:
@@ -258,9 +378,7 @@ class SettingsDialog(QDialog):
                 online.get("fallbackModels", DEFAULT_GEMINI_FALLBACK_MODELS),
             )[1:]
         )
-        self.gemini_fallback_hint = QLabel()
-        self.gemini_fallback_hint.setWordWrap(True)
-        self.gemini_fallback_hint.setObjectName("sectionHint")
+        self.gemini_model_help = self._help_button("Gemini 모델 자동 전환", "")
         self.gemini_model.currentIndexChanged.connect(self._update_gemini_fallback_hint)
         self._update_gemini_fallback_hint()
         self.gemini_key = QLineEdit(get_secret(str(online.get("apiKeyEnv", "GEMINI_API_KEY"))))
@@ -279,17 +397,25 @@ class SettingsDialog(QDialog):
         self.gemini_output_tokens.setSingleStep(1024)
         self.gemini_output_tokens.setSuffix(" 토큰")
         self.gemini_output_tokens.setValue(int(online.get("maxOutputTokens", 32768)))
+
+        model_row = QWidget()
+        model_row.setObjectName("settingsInlineRow")
+        model_layout = QHBoxLayout(model_row)
+        model_layout.setContentsMargins(0, 0, 0, 0)
+        model_layout.setSpacing(8)
+        model_layout.addWidget(self.gemini_model)
+        model_layout.addWidget(self.gemini_model_help)
+        model_layout.addStretch(1)
+
         form.addRow("API 주소", self.gemini_base)
-        form.addRow("Gemini 모델", self.gemini_model)
-        form.addRow("", self.gemini_fallback_hint)
+        form.addRow("Gemini 모델", model_row)
         form.addRow("API Key", self.gemini_key)
         form.addRow("응답 제한 시간", self.gemini_timeout)
         form.addRow("요청 시도 횟수", self.gemini_attempts)
         form.addRow("최대 응답 토큰", self.gemini_output_tokens)
-        hint = QLabel("API 키는 현재 PC의 .env에 저장되며 Git 커밋에서 자동 제외됩니다.")
-        hint.setWordWrap(True)
-        hint.setObjectName("sectionHint")
-        form.addRow("", hint)
+        settings_layout.addLayout(form)
+        page_layout.addWidget(settings_section)
+        page_layout.addStretch(1)
         return widget
 
     def _selected_gemini_model(self) -> str:
@@ -307,14 +433,30 @@ class SettingsDialog(QDialog):
             )
         else:
             message = f"{primary} 모델만 고정 사용하며 다른 모델로 자동 전환하지 않습니다."
-        self.gemini_fallback_hint.setText(
+        self.gemini_fallback_message = (
             message + " 무료 한도는 Google AI Studio에서 확인합니다."
+        )
+        self.gemini_model_help.set_help_content(
+            "Gemini 모델 자동 전환",
+            self.gemini_fallback_message,
         )
 
     def _build_secure_tab(self) -> QWidget:
         widget = QWidget()
-        form = QFormLayout(widget)
-        form.setContentsMargins(20, 18, 20, 18)
+        widget.setObjectName("settingsPage")
+        page_layout = QVBoxLayout(widget)
+        page_layout.setContentsMargins(16, 14, 16, 14)
+        page_layout.setSpacing(10)
+
+        page_layout.addWidget(
+            self._information_section(
+                "Qwen 연결 안내",
+                "Qwen settings.json에서 provider, 모델, 환경 변수와 생성 설정을 읽습니다.",
+            )
+        )
+        settings_section, settings_layout = self._settings_section("연결 설정")
+        form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
         form.setHorizontalSpacing(16)
         form.setVerticalSpacing(9)
         form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -333,19 +475,21 @@ class SettingsDialog(QDialog):
         self.qwen_output_tokens.setSingleStep(1024)
         self.qwen_output_tokens.setSuffix(" 토큰")
         self.qwen_output_tokens.setValue(int(secure.get("maxOutputTokens", 32768)))
-        browse = QPushButton("파일 선택")
-        browse.clicked.connect(self._browse_qwen_settings)
+        self.qwen_browse_button = QPushButton("파일 선택")
+        self.qwen_browse_button.setObjectName("dialogBrowseButton")
+        self.qwen_browse_button.setFixedSize(92, 32)
+        self.qwen_browse_button.clicked.connect(self._browse_qwen_settings)
         row = QHBoxLayout()
+        row.setSpacing(8)
         row.addWidget(self.qwen_settings_path, 1)
-        row.addWidget(browse)
+        row.addWidget(self.qwen_browse_button)
         form.addRow("Qwen 설정 파일", row)
         form.addRow("응답 제한 시간", self.qwen_timeout)
         form.addRow("요청 시도 횟수", self.qwen_attempts)
         form.addRow("최대 응답 토큰", self.qwen_output_tokens)
-        hint = QLabel("Qwen settings.json에서 provider, 모델, 환경 변수와 생성 설정을 읽습니다.")
-        hint.setWordWrap(True)
-        hint.setObjectName("sectionHint")
-        form.addRow("", hint)
+        settings_layout.addLayout(form)
+        page_layout.addWidget(settings_section)
+        page_layout.addStretch(1)
         return widget
 
     def _browse_qwen_settings(self) -> None:

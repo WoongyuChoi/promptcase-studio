@@ -7,8 +7,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from PyQt5.QtCore import QDate, QDir, QSize, QTimer, Qt, pyqtSignal
-from PyQt5.QtGui import QCloseEvent, QFont, QIcon, QTextCursor
+from PyQt5.QtCore import QDate, QDir, QSize, QTimer, Qt, QUrl, pyqtSignal
+from PyQt5.QtGui import QCloseEvent, QDesktopServices, QFont, QIcon, QTextCursor
 from PyQt5.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -35,10 +35,12 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from promptcase_studio import __version__
 from promptcase_studio.config import PROJECT_ROOT, load_settings, resolve_project_path
 from promptcase_studio.excel_writer import validate_workbook
 from promptcase_studio.models import AnalysisRequest, PipelineResult
 from promptcase_studio.template_catalog import UNIT_TEST_TEMPLATE
+from promptcase_studio.ui.icons import interface_icon
 from promptcase_studio.ui.settings_dialog import SettingsDialog
 from promptcase_studio.ui.styles import TERMINAL_STYLE
 from promptcase_studio.ui.tooltip import HelpTooltipButton
@@ -97,6 +99,90 @@ def _validated_atomic_copy(source: Path, destination: Path) -> None:
 class TerminalPanel(QFrame):
     MAX_LOG_CHARS = 1_600
     MAX_STREAM_CHARS = 12_000
+    _LOGO_COLUMNS = (
+        (
+            "████ ",
+            "█   █",
+            "████ ",
+            "█    ",
+            "█    ",
+        ),
+        (
+            "████ ",
+            "█   █",
+            "████ ",
+            "█  █ ",
+            "█   █",
+        ),
+        (
+            " ███ ",
+            "█   █",
+            "█   █",
+            "█   █",
+            " ███ ",
+        ),
+        (
+            "█   █",
+            "██ ██",
+            "█ █ █",
+            "█   █",
+            "█   █",
+        ),
+        (
+            "████ ",
+            "█   █",
+            "████ ",
+            "█    ",
+            "█    ",
+        ),
+        (
+            "█████",
+            "  █  ",
+            "  █  ",
+            "  █  ",
+            "  █  ",
+        ),
+        (
+            " ████",
+            "█    ",
+            "█    ",
+            "█    ",
+            " ████",
+        ),
+        (
+            " ███ ",
+            "█   █",
+            "█████",
+            "█   █",
+            "█   █",
+        ),
+        (
+            " ████",
+            "█    ",
+            " ███ ",
+            "    █",
+            "████ ",
+        ),
+        (
+            "█████",
+            "█    ",
+            "████ ",
+            "█    ",
+            "█████",
+        ),
+    )
+    _LOGO_COLORS = (
+        "#60A5FA",
+        "#818CF8",
+        "#A78BFA",
+        "#C084FC",
+        "#E879F9",
+        "#F472B6",
+        "#FB7185",
+        "#F9739F",
+        "#FB7185",
+        "#F472B6",
+    )
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -149,8 +235,33 @@ class TerminalPanel(QFrame):
         layout.setSpacing(0)
         layout.addWidget(header)
         layout.addWidget(self.output, 1)
+        self.show_startup_banner()
         self.append_log("INFO", "실행 콘솔 준비 완료")
-        self.append_log("INFO", "스캔, AI 요청, 응답, 문서 생성 과정이 여기에 기록됩니다")
+
+    def show_startup_banner(self) -> None:
+        logo_lines: list[str] = []
+        for row in range(len(self._LOGO_COLUMNS[0])):
+            columns = (
+                f'<span style="color:{color}">'
+                f'{html.escape(column[row]).replace(" ", "&nbsp;")}</span>'
+                for column, color in zip(self._LOGO_COLUMNS, self._LOGO_COLORS)
+            )
+            logo_lines.append("&nbsp;".join(columns))
+
+        banner = (
+            '<div style="font-family:\'Cascadia Mono\',Consolas,monospace">'
+            '<div style="font-size:13px;font-weight:700;line-height:1.05">'
+            + "<br>".join(logo_lines)
+            + "</div>"
+            '<div style="margin-top:10px;color:#E8F0FA;font-size:14px;font-weight:700">'
+            f'<span style="color:#86EFAC">&gt;_</span> PROMPTCASE STUDIO '
+            f'<span style="color:#64748B">(v{html.escape(__version__)})</span>'
+            "</div>"
+            "<br>"
+            "</div>"
+        )
+        self.output.setHtml(banner)
+        self.output.moveCursor(QTextCursor.End)
 
     def append_log(self, level: str, message: str) -> None:
         if level == "ATTEMPT":
@@ -322,7 +433,7 @@ class ProjectPathList(QListWidget):
 
 
 class MainWindow(QMainWindow):
-    PROGRESS_TICK_MS = 200
+    PROGRESS_TICK_MS = 300
     PROGRESS_ACTIVE_LIMIT = 92
 
     def __init__(self):
@@ -404,10 +515,14 @@ class MainWindow(QMainWindow):
         self.template_button = QPushButton(UNIT_TEST_TEMPLATE.button_label)
         self.template_button.setObjectName("topActionButton")
         self.template_button.setFixedHeight(30)
+        self.template_button.setIcon(interface_icon("download"))
+        self.template_button.setIconSize(QSize(15, 15))
         self.template_button.clicked.connect(self._download_template)
         self.settings_button = QPushButton("환경설정")
         self.settings_button.setObjectName("topActionButton")
         self.settings_button.setFixedHeight(30)
+        self.settings_button.setIcon(interface_icon("settings"))
+        self.settings_button.setIconSize(QSize(15, 15))
         self.settings_button.clicked.connect(self._open_settings)
         layout.addWidget(mark)
         layout.addSpacing(7)
@@ -495,10 +610,10 @@ class MainWindow(QMainWindow):
         return card, layout
 
     def _build_environment_card(self) -> QFrame:
-        progress_cluster = QWidget()
+        progress_cluster = QFrame()
         progress_cluster.setObjectName("progressCluster")
         progress_layout = QHBoxLayout(progress_cluster)
-        progress_layout.setContentsMargins(0, 0, 0, 0)
+        progress_layout.setContentsMargins(8, 3, 8, 3)
         progress_layout.setSpacing(8)
         self.progress_label = QLabel("진행")
         self.progress_label.setObjectName("progressLabel")
@@ -518,25 +633,24 @@ class MainWindow(QMainWindow):
         )
         self.secure_radio = QRadioButton("폐쇄망(Qwen)")
         self.online_radio = QRadioButton("온라인(Gemini)")
-        self.secure_radio.setFixedWidth(135)
-        self.online_radio.setFixedWidth(160)
         group = QButtonGroup(self)
         group.addButton(self.secure_radio)
         group.addButton(self.online_radio)
         self.online_radio.toggled.connect(self._update_environment_badge)
         row = QHBoxLayout()
+        row.setSpacing(0)
         row.addWidget(self.secure_radio)
-        row.addSpacing(12)
+        row.addSpacing(8)
         row.addWidget(self.online_radio)
         row.addStretch(1)
         layout.addLayout(row)
         return card
 
     def _build_project_card(self) -> QFrame:
-        add_button = QPushButton("셀 추가")
+        add_button = QPushButton("행 추가")
         add_button.setObjectName("compactActionButton")
         add_button.setFixedWidth(70)
-        remove_button = QPushButton("셀 삭제")
+        remove_button = QPushButton("행 삭제")
         remove_button.setObjectName("compactActionButton")
         remove_button.setFixedWidth(70)
         add_button.clicked.connect(self._add_path_cell)
@@ -858,6 +972,13 @@ class MainWindow(QMainWindow):
         except OSError:
             return Path.home()
 
+    def _open_saved_directory(self, directory: Path) -> None:
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory.resolve()))):
+            self.terminal.append_log(
+                "WARN",
+                f"저장 폴더를 자동으로 열지 못했습니다: {directory}",
+            )
+
     def _download_test_case(self) -> None:
         if not self.last_result or not self.last_result.document_path.exists():
             QMessageBox.warning(self, "다운로드 확인", "먼저 변경 분석을 완료해 주세요.")
@@ -882,6 +1003,7 @@ class MainWindow(QMainWindow):
             return
         self.terminal.append_log("DONE", f"테스트케이스 저장 완료: {destination}")
         QMessageBox.information(self, "저장 완료", f"테스트케이스를 저장했습니다.\n{destination}")
+        self._open_saved_directory(destination.parent)
 
     def _download_template(self) -> None:
         source = resolve_project_path(

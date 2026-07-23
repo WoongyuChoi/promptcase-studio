@@ -5,13 +5,15 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtCore import QDate, Qt
+from PyQt5.QtCore import QDate, QSize, Qt
 from PyQt5.QtWidgets import (
     QApplication,
     QFileDialog,
+    QFrame,
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPushButton,
     QTabWidget,
     QToolButton,
 )
@@ -45,6 +47,16 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertIsNone(window.findChild(QLabel, "terminalSub"))
         self.assertEqual(window.terminal.status.text(), "READY")
         self.assertEqual(window.terminal.status.property("state"), "ready")
+        startup_text = window.terminal.output.toPlainText()
+        self.assertIn("PROMPTCASE STUDIO", startup_text)
+        self.assertIn("(v0.1.0)", startup_text)
+        self.assertIn("[INFO] 실행 콘솔 준비 완료", startup_text)
+        self.assertEqual(len(window.terminal._LOGO_COLUMNS), 10)
+        self.assertEqual(len(window.terminal._LOGO_COLORS), 10)
+        self.assertGreater(window.terminal.output.toHtml().count("\xa0"), 50)
+        self.assertNotIn("SECURE NETWORK", startup_text)
+        self.assertNotIn("qwen3.6-agent", startup_text)
+        self.assertNotIn("SCAN > CONTEXT > AI > VALIDATE > EXCEL", startup_text)
         window.terminal.set_running(True)
         self.assertEqual(window.terminal.status.text(), "RUNNING")
         self.assertEqual(window.terminal.status.property("state"), "running")
@@ -84,8 +96,19 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(window.date_from_label.text(), "시작일")
         self.assertEqual(window.date_to_label.text(), "종료일")
         self.assertEqual(window.template_button.text(), "템플릿 내려받기")
+        self.assertFalse(window.template_button.icon().isNull())
+        self.assertFalse(window.settings_button.icon().isNull())
+        self.assertEqual(window.template_button.iconSize(), QSize(15, 15))
+        self.assertEqual(window.settings_button.iconSize(), QSize(15, 15))
+        self.assertFalse(window.template_button.icon().pixmap(QSize(30, 30)).isNull())
+        self.assertFalse(window.settings_button.icon().pixmap(QSize(30, 30)).isNull())
         self.assertEqual(window.header_environment.height(), window.settings_button.height())
         self.assertEqual(window.template_button.height(), window.settings_button.height())
+        button_texts = {button.text() for button in window.findChildren(QPushButton)}
+        self.assertIn("행 추가", button_texts)
+        self.assertIn("행 삭제", button_texts)
+        self.assertNotIn("셀 추가", button_texts)
+        self.assertNotIn("셀 삭제", button_texts)
         window.terminal.append_log("SCAN", "테스트 로그")
         self.assertIn("테스트 로그", window.terminal.output.toPlainText())
         window.terminal.append_log("TRACE", "A" * 2_000)
@@ -203,10 +226,19 @@ class GuiSmokeTests(unittest.TestCase):
             patch.object(QFileDialog, "getSaveFileName", return_value=(str(destination), "")),
             patch.object(QMessageBox, "information"),
             patch.object(QMessageBox, "critical") as critical,
+            patch(
+                "promptcase_studio.ui.main_window.QDesktopServices.openUrl",
+                return_value=True,
+            ) as open_directory,
         ):
             window._download_test_case()
         self.assertTrue(destination.exists(), critical.call_args)
         critical.assert_not_called()
+        open_directory.assert_called_once()
+        self.assertEqual(
+            Path(open_directory.call_args.args[0].toLocalFile()),
+            destination.parent.resolve(),
+        )
         window.close()
 
     def test_template_download_uses_english_source_and_korean_default_name(self):
@@ -359,6 +391,12 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertFalse(window.control_scroll.verticalScrollBar().isVisible())
         self.assertEqual(window.control_scroll.parentWidget().width(), 580)
         self.assertGreaterEqual(window.online_radio.width(), window.online_radio.sizeHint().width())
+        radio_gap = (
+            window.online_radio.geometry().left()
+            - window.secure_radio.geometry().right()
+            - 1
+        )
+        self.assertEqual(radio_gap, 8)
         self.assertGreater(window.date_from_label.x(), window.date_checkbox.geometry().right())
         self.assertLessEqual(window.date_from.width(), 132)
         self.assertLessEqual(window.date_to.width(), 132)
@@ -387,6 +425,9 @@ class GuiSmokeTests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(vertical_scroll.value(), vertical_scroll.maximum())
         self.assertFalse(window.control_scroll.horizontalScrollBar().isVisible())
+        self.assertFalse(
+            window.terminal.output.horizontalScrollBar().isVisible()
+        )
         self.assertGreaterEqual(window.control_scroll.parentWidget().width(), 500)
         self.assertLessEqual(window.control_scroll.parentWidget().width(), 620)
         self.assertEqual(window.progress.parentWidget().objectName(), "progressCluster")
@@ -419,13 +460,25 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(dialog.windowTitle(), "Promptcase Studio 환경설정")
         self.assertEqual(dialog.width(), 800)
         self.assertEqual(dialog.height(), 580)
+        self.assertEqual(dialog.findChild(QLabel, "dialogTitle").text(), "환경설정")
+        self.assertEqual(dialog.tabs.objectName(), "settingsTabs")
+        self.assertEqual(dialog.save_button.objectName(), "dialogPrimaryButton")
+        self.assertEqual(dialog.cancel_button.objectName(), "dialogSecondaryButton")
+        self.assertEqual(dialog.save_button.size(), QSize(88, 32))
+        self.assertEqual(dialog.cancel_button.size(), QSize(72, 32))
+        self.assertEqual(dialog.qwen_browse_button.size(), QSize(92, 32))
         self.assertEqual(dialog.qwen_settings_path.text(), "config/qwen.settings.json")
         self.assertEqual(dialog.gemini_timeout.value(), 300)
         self.assertEqual(dialog.gemini_model.currentData(), "auto")
         self.assertEqual(dialog.gemini_model.count(), 5)
         self.assertEqual(dialog.gemini_model.itemText(0), "Auto")
         self.assertEqual(dialog.gemini_model.itemText(1), "Gemini 3.6 Flash")
-        self.assertIn("gemini-3.5-flash-lite", dialog.gemini_fallback_hint.text())
+        self.assertIn("gemini-3.5-flash-lite", dialog.gemini_fallback_message)
+        self.assertEqual(
+            dialog.gemini_model_help.tooltip_body,
+            dialog.gemini_fallback_message,
+        )
+        self.assertEqual(dialog.gemini_model.width(), 280)
         self.assertEqual(dialog.gemini_attempts.value(), 3)
         self.assertEqual(dialog.gemini_output_tokens.value(), 32768)
         self.assertEqual(dialog.gemini_key.echoMode(), QLineEdit.Normal)
@@ -437,7 +490,18 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(dialog.quality_review_passes.value(), 2)
         self.assertEqual(dialog.quality_review_validation_attempts.value(), 2)
         self.assertEqual(dialog.quality_gate_mode.currentData(), "best_effort")
-        self.assertIn("최대 4회", dialog.quality_request_hint.text())
+        self.assertIn("최대 4회", dialog.quality_request_help.tooltip_body)
+        self.assertFalse(
+            bool(dialog.windowFlags() & Qt.WindowContextHelpButtonHint)
+        )
+        self.assertGreaterEqual(
+            len(dialog.findChildren(QFrame, "settingsSection")),
+            4,
+        )
+        self.assertEqual(
+            len(dialog.findChildren(QFrame, "settingsInfoSection")),
+            2,
+        )
         increase = dialog.quality_review_passes.findChild(
             QToolButton, "spinIncreaseButton"
         )
@@ -450,6 +514,22 @@ class GuiSmokeTests(unittest.TestCase):
         tabs = dialog.findChild(QTabWidget)
         tabs.setCurrentIndex(0)
         self.app.processEvents()
+        self.assertEqual(dialog.qwen_settings_path.minimumHeight(), 32)
+        self.assertEqual(dialog.qwen_settings_path.maximumHeight(), 32)
+        self.assertEqual(dialog.quality_gate_mode.height(), 34)
+        self.assertGreaterEqual(dialog.quality_gate_mode.view().minimumHeight(), 72)
+        dialog.quality_gate_mode.showPopup()
+        self.app.processEvents()
+        self.assertTrue(dialog.quality_gate_mode.view().isVisible())
+        self.assertGreaterEqual(
+            dialog.quality_gate_mode.view().viewport().height(),
+            56,
+        )
+        dialog.quality_gate_mode.hidePopup()
+        self.assertEqual(dialog.qwen_timeout.minimumHeight(), 32)
+        self.assertEqual(dialog.qwen_timeout.maximumHeight(), 32)
+        self.assertEqual(dialog.save_button.height(), window.run_button.height())
+        self.assertEqual(dialog.qwen_browse_button.height(), window.run_button.height())
         self.assertTrue(increase.isVisible())
         self.assertTrue(decrease.isVisible())
         self.assertLess(increase.geometry().right(), dialog.quality_review_passes.width())
@@ -458,6 +538,27 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(dialog.quality_review_passes.value(), 3)
         decrease.click()
         self.assertEqual(dialog.quality_review_passes.value(), 2)
+        dialog.close()
+        window.close()
+
+    def test_settings_dialog_remains_aligned_at_minimum_size(self):
+        window = MainWindow()
+        dialog = SettingsDialog(window.settings, window)
+        dialog.resize(dialog.minimumSize())
+        dialog.show()
+
+        for index in range(dialog.tabs.count()):
+            dialog.tabs.setCurrentIndex(index)
+            self.app.processEvents()
+            page = dialog.tabs.currentWidget()
+            self.assertGreater(page.width(), 0)
+            self.assertGreater(page.height(), 0)
+
+        self.assertEqual(dialog.size(), QSize(720, 540))
+        self.assertLess(dialog.button_box.geometry().bottom(), dialog.height())
+        self.assertGreaterEqual(dialog.tabs.width(), 680)
+        self.assertEqual(dialog.save_button.height(), 32)
+        self.assertEqual(dialog.cancel_button.height(), 32)
         dialog.close()
         window.close()
 
@@ -520,6 +621,18 @@ class GuiSmokeTests(unittest.TestCase):
     def test_native_checkbox_indicator_is_not_replaced_by_solid_fill(self):
         self.assertNotIn("QCheckBox::indicator:checked", APP_STYLESHEET)
         self.assertNotIn("button-symbols", APP_STYLESHEET)
+        self.assertIn(
+            "QDialog#settingsDialog QRadioButton::indicator",
+            APP_STYLESHEET,
+        )
+        self.assertIn(
+            "QDialog#settingsDialog QCheckBox::indicator",
+            APP_STYLESHEET,
+        )
+        self.assertNotIn(
+            "QDialog#settingsDialog QComboBox::drop-down",
+            APP_STYLESHEET,
+        )
 
     def test_git_import_keeps_the_origin_root_for_duplicate_relative_paths(self):
         fixture = Path(__file__).parent / "fixtures" / "multi_root"

@@ -152,6 +152,18 @@ class HelpTooltipButton(QToolButton):
         self.setFixedSize(12, 12)
         self.clicked.connect(self.show_bubble)
 
+    def set_help_content(self, title: str, body: str) -> None:
+        self.tooltip_title = title
+        self.tooltip_body = body
+        self.setToolTip(body)
+        self.setStatusTip(body)
+        self.setAccessibleName(f"{title} 도움말")
+        self.setAccessibleDescription(body)
+        if self._bubble is not None:
+            self._bubble.hide()
+            self._bubble.deleteLater()
+            self._bubble = None
+
     def _ensure_bubble(self) -> TooltipBubble:
         if self._bubble is None:
             self._bubble = TooltipBubble(

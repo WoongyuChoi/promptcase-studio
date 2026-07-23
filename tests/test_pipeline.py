@@ -7,7 +7,13 @@ from unittest.mock import patch
 
 from promptcase_studio.config import load_settings
 from promptcase_studio.models import AnalysisRequest, ChangeItem
-from promptcase_studio.pipeline import PipelinePausedError, _document_title, _program_info, run_pipeline
+from promptcase_studio.pipeline import (
+    PipelinePausedError,
+    _document_title,
+    _program_category,
+    _program_info,
+    run_pipeline,
+)
 from promptcase_studio.providers.mock import MockProvider
 from promptcase_studio.providers.base import (
     ProviderError,
@@ -178,6 +184,68 @@ class PipelineTests(unittest.TestCase):
         )
 
         self.assertEqual(rows[0]["project"], "sample_project")
+
+    def test_program_info_dynamically_classifies_sql_and_work_content(self):
+        rows = _program_info(
+            [
+                ChangeItem(
+                    "C:/Project/accounting",
+                    "src/main/java/BalanceService.java",
+                    "변경",
+                    "manual",
+                    True,
+                ),
+                ChangeItem(
+                    "C:/Project/accounting",
+                    "src/main/resources/mapper/BalanceMapper.xml",
+                    "신규",
+                    "manual",
+                    True,
+                ),
+                ChangeItem(
+                    "C:/Project/accounting",
+                    "db/drop_legacy_view.sql",
+                    "삭제",
+                    "manual",
+                    False,
+                ),
+            ],
+            "통합정산시스템",
+        )
+
+        self.assertEqual(rows[0]["category"], "통합정산시스템")
+        self.assertEqual(rows[0]["detailCategory"], "Program")
+        self.assertEqual(
+            rows[0]["workContent"],
+            "요건 변경에 따른 개발 프로그램 수정",
+        )
+        self.assertEqual(rows[1]["detailCategory"], "SQL")
+        self.assertEqual(
+            rows[1]["workContent"],
+            "요건 변경에 따른 신규 SQL 추가",
+        )
+        self.assertEqual(rows[2]["detailCategory"], "SQL")
+        self.assertEqual(
+            rows[2]["workContent"],
+            "요건 변경에 따른 불필요 SQL 삭제",
+        )
+
+    def test_program_category_uses_document_system_and_keeps_legacy_default(self):
+        request = AnalysisRequest(
+            project_roots=[Path("C:/Project/sample")],
+            manual_changes="",
+            request_text="사용자 조회 조건을 변경한다",
+            environment="online",
+        )
+
+        self.assertEqual(
+            _program_category({"documentTitle": "인사관리시스템"}, request),
+            "인사관리시스템",
+        )
+        self.assertEqual(
+            _program_category({"documentTitle": ""}, request),
+            "채산관리시스템",
+        )
 
     def test_mock_pipeline_runs_without_network_and_generates_xlsx(self):
         case_directory = TEMP_ROOT / "pipeline"

@@ -23,7 +23,28 @@ QLabel#brandMark {
 QLabel#brandTitle { color: #101828; font-size: 18px; font-weight: 800; }
 QLabel#brandSub { color: #7B8798; font-size: 12px; }
 QLabel#dialogTitle { color: #101828; font-size: 18px; font-weight: 800; }
-QLabel#dialogSubtitle { color: #7B8798; font-size: 13px; }
+QLabel#dialogSubtitle { color: #7B8798; font-size: 12px; }
+QWidget#settingsPage { background: transparent; }
+QFrame#settingsSection {
+    background: #F8FAFC;
+    border: 1px solid #DFE7F0;
+    border-radius: 10px;
+}
+QFrame#settingsInfoSection {
+    background: #F2F6FB;
+    border: 1px solid #D8E2EE;
+    border-radius: 10px;
+}
+QLabel#settingsSectionTitle {
+    color: #26354B;
+    font-size: 14px;
+    font-weight: 750;
+}
+QLabel#settingsInfoText {
+    color: #66758A;
+    font-size: 13px;
+}
+QWidget#settingsInlineRow { background: transparent; }
 QLabel#environmentBadge {
     min-width: 108px;
     padding: 0 10px;
@@ -77,7 +98,11 @@ QLabel#tooltipBody {
     font-weight: 600;
 }
 QLabel#progressLabel { color: #7B8798; font-size: 12px; }
-QWidget#progressCluster { background: transparent; }
+QFrame#progressCluster {
+    background: #F7F9FC;
+    border: 1px solid #DFE7F0;
+    border-radius: 8px;
+}
 QWidget#controlPanel QRadioButton,
 QWidget#controlPanel QCheckBox {
     font-size: 12px;
@@ -137,15 +162,63 @@ QPushButton {
 QPushButton:hover { background: #F6F9FC; border-color: #B8C6D8; }
 QPushButton:pressed { background: #EDF2F7; }
 QPushButton:disabled { background: #EFF2F5; color: #A1AAB6; border-color: #E1E6EC; }
-QDialog QPushButton {
-    min-height: 22px;
-    max-height: 24px;
-    padding: 0 9px;
+QDialog#settingsDialog QPushButton {
+    min-height: 30px;
+    max-height: 32px;
+    padding: 0 12px;
+    border-radius: 7px;
+    font-size: 13px;
 }
-QDialog QLineEdit, QDialog QComboBox {
-    min-height: 20px;
-    max-height: 22px;
+QDialog#settingsDialog QLineEdit, QDialog#settingsDialog QComboBox {
     padding: 4px 8px;
+    font-size: 13px;
+}
+QDialog#settingsDialog QComboBox {
+    padding: 0 10px;
+}
+QDialog#settingsDialog QComboBox QAbstractItemView {
+    padding: 4px;
+    border: 1px solid #C9D4E1;
+    background: #FFFFFF;
+    color: #344054;
+    selection-background-color: #E5F7E8;
+    selection-color: #126B20;
+    outline: 0;
+}
+QDialog#settingsDialog QComboBox QAbstractItemView::item {
+    min-height: 28px;
+    padding: 3px 8px;
+}
+QDialog#settingsDialog QRadioButton,
+QDialog#settingsDialog QCheckBox {
+    min-height: 21px;
+    padding: 0;
+    font-size: 12px;
+}
+QDialog#settingsDialog QRadioButton::indicator,
+QDialog#settingsDialog QCheckBox::indicator {
+    width: 12px;
+    height: 12px;
+}
+QPushButton#dialogPrimaryButton {
+    background: #23367F;
+    border-color: #23367F;
+    color: #FFFFFF;
+    font-weight: 750;
+}
+QPushButton#dialogPrimaryButton:hover {
+    background: #2D469B;
+    border-color: #2D469B;
+}
+QPushButton#dialogPrimaryButton:pressed {
+    background: #1D2E6D;
+    border-color: #1D2E6D;
+}
+QPushButton#dialogSecondaryButton,
+QPushButton#dialogBrowseButton {
+    background: #FFFFFF;
+    border-color: #CFD9E6;
+    color: #344054;
 }
 QPushButton#topActionButton {
     min-height: 28px;
@@ -231,9 +304,30 @@ QToolButton#spinIncreaseButton:disabled, QToolButton#spinDecreaseButton:disabled
     background: #F7F8FA;
     color: #C3CBD5;
 }
-QTabWidget::pane { border: 1px solid #DFE7F0; background: #FFFFFF; border-radius: 7px; }
-QTabBar::tab { background: #E9EEF5; color: #667085; padding: 7px 14px; margin-right: 3px; border-top-left-radius: 6px; border-top-right-radius: 6px; font-size: 13px; }
-QTabBar::tab:selected { background: #FFFFFF; color: #172033; font-weight: 700; }
+QTabWidget#settingsTabs::pane {
+    top: -1px;
+    border: 1px solid #DFE7F0;
+    background: #FFFFFF;
+    border-radius: 10px;
+}
+QTabWidget#settingsTabs QTabBar::tab {
+    min-height: 30px;
+    padding: 0 16px;
+    margin-right: 4px;
+    background: #E9EEF5;
+    color: #667085;
+    border: 1px solid transparent;
+    border-bottom: 0;
+    border-top-left-radius: 7px;
+    border-top-right-radius: 7px;
+    font-size: 13px;
+}
+QTabWidget#settingsTabs QTabBar::tab:selected {
+    background: #FFFFFF;
+    color: #172033;
+    border-color: #DFE7F0;
+    font-weight: 700;
+}
 QScrollArea { background: transparent; border: 0; }
 QScrollBar:vertical {
     width: 10px;

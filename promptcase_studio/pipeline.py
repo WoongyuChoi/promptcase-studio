@@ -10,6 +10,12 @@ from typing import Any
 from promptcase_studio.config import resolve_project_path
 from promptcase_studio.excel_writer import generate_workbook
 from promptcase_studio.models import AnalysisRequest, ChangeItem, ChunkCallback, LogCallback, PipelineResult
+from promptcase_studio.program_info import (
+    DEFAULT_PROGRAM_CATEGORY,
+    build_work_content,
+    classify_program_detail,
+    normalize_program_category,
+)
 from promptcase_studio.prompt_builder import build_prompt_package
 from promptcase_studio.providers import create_provider
 from promptcase_studio.providers.base import ProviderError, ProviderRateLimitError
@@ -112,22 +118,41 @@ def _project_label(change: ChangeItem) -> str:
     return "프로젝트"
 
 
-def _program_info(changes: list[ChangeItem]) -> list[dict[str, str]]:
-    work_content = {
-        "신규": "요건 변경에 따른 신규 프로그램 추가",
-        "삭제": "요건 변경에 따른 불필요 프로그램 삭제",
-        "이름변경": "요건 변경에 따른 프로그램 명칭 및 참조 경로 변경",
-        "변경": "요건 변경에 따른 개발 프로그램 수정",
-    }
-    return [
-        {
-            "program": Path(item.path).name,
-            "project": _project_label(item),
-            "workContent": work_content.get(item.change_type, "요건 변경에 따른 개발 프로그램 수정"),
-            "changeType": item.change_type,
-        }
-        for item in changes
-    ]
+def _program_info(
+    changes: list[ChangeItem],
+    category: str = DEFAULT_PROGRAM_CATEGORY,
+) -> list[dict[str, str]]:
+    normalized_category = normalize_program_category(category)
+    rows: list[dict[str, str]] = []
+    for item in changes:
+        detail_category = classify_program_detail(item.path)
+        rows.append(
+            {
+                "category": normalized_category,
+                "detailCategory": detail_category,
+                "program": Path(item.path).name,
+                "project": _project_label(item),
+                "workContent": build_work_content(
+                    item.change_type,
+                    detail_category,
+                ),
+                "changeType": item.change_type,
+            }
+        )
+    return rows
+
+
+def _program_category(
+    structured: dict[str, Any],
+    request: AnalysisRequest,
+) -> str:
+    supplied = str(structured.get("documentTitle", "")).strip()
+    if supplied:
+        return normalize_program_category(supplied)
+    inferred_title = _document_title(structured, request).replace("_", " ")
+    if "시스템" in inferred_title:
+        return normalize_program_category(inferred_title)
+    return DEFAULT_PROGRAM_CATEGORY
 
 
 def _safe_output_stem(name: str) -> str:
@@ -626,7 +651,14 @@ def run_pipeline(
     except Exception as exc:
         _log(log, "ERROR", f"AI 응답 생성 또는 검증 실패: {exc}")
         raise
-    document = {"programInfo": _program_info(bundle.changes), **structured}
+    title = _document_title(structured, request)
+    document = {
+        "programInfo": _program_info(
+            bundle.changes,
+            _program_category(structured, request),
+        ),
+        **structured,
+    }
     (run_directory / "document.json").write_text(
         json.dumps(document, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -639,7 +671,6 @@ def run_pipeline(
     template_path = resolve_project_path(
         settings.get("templatePath", UNIT_TEST_TEMPLATE.relative_path)
     )
-    title = _document_title(structured, request)
     suggested_filename = f"{title}_단위테스트_{started.strftime('%Y%m%d_%H%M%S')}.xlsx"
     document_path = run_directory / "unit-test-preview.xlsx"
     _log(log, "EXCEL", "원본 템플릿의 서식과 3개 시트를 유지해 다운로드용 초안 생성")

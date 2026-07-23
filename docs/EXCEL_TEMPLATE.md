@@ -12,8 +12,12 @@ Promptcase Studio는 내부 파일 `templates/unittest_template.xlsx`를 새로 
 ## 프로그램 정보 시트
 
 4행을 변경 파일 수만큼 복제합니다. 생성 행은 약 20픽셀에 해당하는 15포인트 높이로 통일하며,
+`구분`, `상세구분`, `작업 내용`은 시스템명, 파일 종류와 변경구분을 기준으로 동적으로
+채웁니다. SQL 확장자와 mapper XML은 `SQL`, 그 밖의 파일은 `Program`으로 분류합니다.
 `작업 내용` 셀은 템플릿을 복제한 뒤에도 가운데 정렬과 자동 줄바꿈을 유지합니다.
 
+- `{{category}}`: 시스템 구분명
+- `{{detail_category}}`: `Program` 또는 `SQL`
 - `{{program}}`: 프로그램 파일명
 - `{{project}}`: 변경 파일이 속한 최상위 프로젝트명
 - `{{work_content}}`: 작업 내용

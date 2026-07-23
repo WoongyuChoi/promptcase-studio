@@ -23,11 +23,19 @@ TEMP_ROOT = PROJECT_ROOT / "tmp" / "tests"
 def document_fixture():
     return {
         "programInfo": [
-            {"program": "UserService.java", "project": "sample", "changeType": "변경"},
             {
-                "program": "LegacyApi.java",
+                "category": "사업계획관리시스템",
+                "detailCategory": "Program",
+                "program": "UserService.java",
                 "project": "sample",
-                "workContent": "요건 변경에 따른 불필요 프로그램 삭제",
+                "changeType": "변경",
+            },
+            {
+                "category": "정산시스템",
+                "detailCategory": "SQL",
+                "program": "delete_legacy_api.sql",
+                "project": "sample",
+                "workContent": "요건 변경에 따른 불필요 SQL 삭제",
                 "changeType": "삭제",
             },
         ],
@@ -139,6 +147,8 @@ def workbook_text_values(archive):
 def make_placeholder_template(destination):
     placements = {
         "프로그램 정보": {
+            "B4": "{{category}}",
+            "C4": "{{detail_category}}",
             "D4": "{{program}}",
             "E4": "{{project}}",
             "F4": "{{work_content}}",
@@ -212,12 +222,27 @@ class ExcelWriterTests(unittest.TestCase):
             program = ET.fromstring(archive.read(paths["프로그램 정보"]))
             test_case = ET.fromstring(archive.read(paths["테스트케이스"]))
             result = ET.fromstring(archive.read(paths["테스트 결과"]))
+            self.assertEqual(
+                cell_value(program, "B4", shared_values),
+                "사업계획관리시스템",
+            )
+            self.assertEqual(cell_value(program, "C4", shared_values), "Program")
             self.assertEqual(cell_value(program, "D4", shared_values), "UserService.java")
-            self.assertEqual(cell_value(program, "D5", shared_values), "LegacyApi.java")
+            self.assertEqual(
+                cell_value(program, "F4", shared_values),
+                "요건 변경에 따른 개발 프로그램 수정",
+            )
+            self.assertEqual(
+                cell_value(program, "D5", shared_values),
+                "delete_legacy_api.sql",
+            )
             self.assertEqual(cell_value(program, "G5", shared_values), "삭제")
-            self.assertEqual(cell_value(program, "B5", shared_values), "채산관리시스템")
-            self.assertEqual(cell_value(program, "C5", shared_values), "Program")
-            self.assertEqual(cell_value(program, "F5", shared_values), "요건 변경에 따른 불필요 프로그램 삭제")
+            self.assertEqual(cell_value(program, "B5", shared_values), "정산시스템")
+            self.assertEqual(cell_value(program, "C5", shared_values), "SQL")
+            self.assertEqual(
+                cell_value(program, "F5", shared_values),
+                "요건 변경에 따른 불필요 SQL 삭제",
+            )
             self.assertEqual(row_height(program, 4), 15.0)
             self.assertEqual(row_height(program, 5), 15.0)
             work_alignment = style_alignment(archive, cell_style_id(program, "F5"))
@@ -251,9 +276,17 @@ class ExcelWriterTests(unittest.TestCase):
             shared_values = shared_string_values(archive)
             program = ET.fromstring(archive.read(paths["프로그램 정보"]))
             test_case = ET.fromstring(archive.read(paths["테스트케이스"]))
-            self.assertEqual(cell_value(program, "D5", shared_values), "LegacyApi.java")
+            self.assertEqual(cell_value(program, "B5", shared_values), "정산시스템")
+            self.assertEqual(cell_value(program, "C5", shared_values), "SQL")
+            self.assertEqual(
+                cell_value(program, "D5", shared_values),
+                "delete_legacy_api.sql",
+            )
             self.assertEqual(cell_value(program, "E5", shared_values), "sample")
-            self.assertEqual(cell_value(program, "F5", shared_values), "요건 변경에 따른 불필요 프로그램 삭제")
+            self.assertEqual(
+                cell_value(program, "F5", shared_values),
+                "요건 변경에 따른 불필요 SQL 삭제",
+            )
             self.assertEqual(cell_value(program, "G5", shared_values), "삭제")
             self.assertEqual(
                 cell_value(test_case, "C3", shared_values),

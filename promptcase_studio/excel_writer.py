@@ -8,6 +8,12 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
+from promptcase_studio.program_info import (
+    build_work_content,
+    classify_program_detail,
+    normalize_program_category,
+)
+
 
 MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -476,13 +482,31 @@ def _clone_program_rows(
         _renumber_row(row, row_number)
         row.attrib["ht"] = f"{PROGRAM_ROW_HEIGHT_POINTS:.2f}"
         row.attrib["customHeight"] = "1"
+        change_type = item.get("changeType", "변경")
+        detail_category = str(
+            item.get("detailCategory")
+            or item.get("detailType")
+            or classify_program_detail(item.get("program", ""))
+        ).strip()
         field_values = {
+            "category": normalize_program_category(
+                item.get("category") or item.get("system")
+            ),
+            "detail_category": detail_category,
             "program": item.get("program", ""),
             "project": item.get("project", ""),
-            "work_content": item.get("workContent", "요건 변경에 따른 개발 프로그램 수정"),
-            "change_type": item.get("changeType", "변경"),
+            "work_content": item.get("workContent")
+            or build_work_content(change_type, detail_category),
+            "change_type": change_type,
         }
         aliases = {
+            "category": ("category", "division", "system", "system_name"),
+            "detail_category": (
+                "detail_category",
+                "detailcategory",
+                "detail_type",
+                "detailtype",
+            ),
             "program": ("program", "program_name", "file_name", "filename"),
             "project": ("project", "project_name"),
             "work_content": ("work_content", "workcontent"),
@@ -498,6 +522,8 @@ def _clone_program_rows(
                 _use_wrapped_style(cell, centered_style_map)
         used = _replace_placeholders(row, shared_strings, placeholder_values, style_map)
         fallback_columns = {
+            "category": "B",
+            "detail_category": "C",
             "program": "D",
             "project": "E",
             "work_content": "F",
@@ -510,7 +536,7 @@ def _clone_program_rows(
             for field, fallback_column in fallback_columns.items():
                 if column.group(0) == fallback_column and not _aliases_used(used, aliases[field]):
                     _set_inline_text(cell, field_values[field])
-                    if field in {"program", "project"}:
+                    if field in {"category", "detail_category", "program", "project"}:
                         _use_wrapped_style(cell, style_map)
                     elif field == "work_content":
                         _use_wrapped_style(cell, centered_style_map)
