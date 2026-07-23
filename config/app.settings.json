@@ -5,6 +5,10 @@
   "outputDirectory": "outputs",
   "runDirectory": "runs",
   "mockMode": false,
+  "responseValidationAttempts": 3,
+  "qualityReviewEnabled": true,
+  "qualityReviewPasses": 2,
+  "qualityReviewValidationAttempts": 2,
   "providers": {
     "online": {
       "type": "gemini",
@@ -13,7 +17,8 @@
       "apiKeyEnv": "GEMINI_API_KEY",
       "timeoutSeconds": 300,
       "maxAttempts": 3,
-      "retryDelaySeconds": 2
+      "retryDelaySeconds": 2,
+      "maxOutputTokens": 32768
     },
     "secure": {
       "type": "qwen",
@@ -21,14 +26,26 @@
       "timeoutSeconds": 300,
       "maxAttempts": 3,
       "retryDelaySeconds": 2,
+      "maxOutputTokens": 32768,
       "stream": true
     }
   },
   "scanner": {
-    "maxCandidateFiles": 10000,
-    "maxChangedFileChars": 24000,
-    "maxRelatedFiles": 12,
-    "maxRelatedFileChars": 7000,
-    "maxContextChars": 70000
+    "maxCandidateFiles": 20000,
+    "maxChangedFileChars": 48000,
+    "maxRelatedFiles": 32,
+    "maxRelatedFileChars": 16000,
+    "relatedContextRatio": 0.25,
+    "maxContextChars": 360000,
+    "maxDiffChars": 32000,
+    "maxContentScanFiles": 10000,
+    "maxSourceScanChars": 320000
+  },
+  "prompt": {
+    "maxPromptChars": 420000,
+    "maxRequestChars": 24000,
+    "maxManifestChars": 48000,
+    "maxChangeNotesChars": 16000,
+    "reviewReserveChars": 24000
   }
 }

@@ -12,6 +12,8 @@ venv/
 .env.*
 !.env.example
 config/*.local.json
+config/*.local.json.tmp
+config/*.local.tmp
 config/*secrets*.json
 *.key
 *.pem
@@ -27,10 +29,10 @@ tmp/
 build/
 dist/
 *.spec
+!promptcase-studio.spec
 
 # Editors / OS
 .idea/
 .vscode/
 .DS_Store
 Thumbs.db
-

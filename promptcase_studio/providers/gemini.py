@@ -5,7 +5,15 @@ import urllib.request
 from typing import Any
 
 from promptcase_studio.models import ChunkCallback, LogCallback
-from promptcase_studio.providers.base import ProviderError, TextGenerationProvider, open_with_retry
+from promptcase_studio.providers.base import (
+    GenerationDiagnostics,
+    ProviderError,
+    TextGenerationProvider,
+    log_generation_diagnostics,
+    open_with_retry,
+    split_prompt_sections,
+    token_count,
+)
 
 
 class GeminiProvider(TextGenerationProvider):
@@ -15,7 +23,9 @@ class GeminiProvider(TextGenerationProvider):
         self.timeout = int(config.get("timeoutSeconds", 300))
         self.max_attempts = int(config.get("maxAttempts", 3))
         self.retry_delay_seconds = float(config.get("retryDelaySeconds", 2))
+        self.max_output_tokens = int(config.get("maxOutputTokens", 0) or 0)
         self.api_key = api_key
+        self.last_diagnostics: GenerationDiagnostics | None = None
 
     @staticmethod
     def extract_text(payload: dict[str, Any]) -> str:
@@ -30,18 +40,60 @@ class GeminiProvider(TextGenerationProvider):
             raise ProviderError("Gemini 응답에 텍스트가 없습니다.")
         return text
 
+    @staticmethod
+    def response_diagnostics(payload: dict[str, Any]) -> GenerationDiagnostics:
+        candidates = payload.get("candidates")
+        primary = candidates[0] if isinstance(candidates, list) and candidates else {}
+        finish_reason = str(primary.get("finishReason", "")).strip()
+        if not finish_reason:
+            feedback = payload.get("promptFeedback")
+            if isinstance(feedback, dict):
+                finish_reason = str(feedback.get("blockReason", "")).strip()
+        usage = payload.get("usageMetadata")
+        if not isinstance(usage, dict):
+            usage = {}
+        return GenerationDiagnostics(
+            finish_reason=finish_reason or "MISSING",
+            prompt_tokens=token_count(usage.get("promptTokenCount")),
+            completion_tokens=token_count(usage.get("candidatesTokenCount")),
+            total_tokens=token_count(usage.get("totalTokenCount")),
+        )
+
+    @staticmethod
+    def _raise_for_finish_reason(diagnostics: GenerationDiagnostics) -> None:
+        reason = diagnostics.finish_reason.upper()
+        if reason == "STOP":
+            return
+        if reason == "MAX_TOKENS":
+            raise ProviderError(
+                "Gemini 응답이 출력 토큰 한도 MAX_TOKENS에 도달하여 잘렸습니다. "
+                "maxOutputTokens 설정을 늘린 뒤 다시 시도해 주세요."
+            )
+        if reason in {"SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"}:
+            raise ProviderError(f"Gemini 응답이 안전 정책에 의해 종료되었습니다: {reason}")
+        raise ProviderError(f"Gemini 응답이 정상 종료되지 않았습니다: {reason}")
+
     def generate(
         self,
         prompt: str,
         log: LogCallback | None = None,
         on_chunk: ChunkCallback | None = None,
     ) -> str:
+        self.last_diagnostics = None
         if not self.api_key:
             raise ProviderError("GEMINI_API_KEY가 없습니다. 환경설정 또는 .env를 확인해 주세요.")
         url = f"{self.api_base}/models/{self.model}:generateContent"
+        system_prompt, user_prompt = split_prompt_sections(prompt)
+        generation_config: dict[str, Any] = {
+            "temperature": 0.2,
+            "responseMimeType": "application/json",
+        }
+        if self.max_output_tokens > 0:
+            generation_config["maxOutputTokens"] = self.max_output_tokens
         body = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.2},
+            "system_instruction": {"parts": [{"text": system_prompt}]},
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "generationConfig": generation_config,
         }
         if log:
             log("API", f"Gemini {self.model}에 {len(prompt):,}자 프롬프트 전송")
@@ -69,9 +121,16 @@ class GeminiProvider(TextGenerationProvider):
         except (TimeoutError, OSError) as exc:
             raise ProviderError(f"Gemini 응답 수신 중 연결이 중단되었습니다: {exc}") from exc
         try:
-            text = self.extract_text(json.loads(raw))
+            payload = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise ProviderError(f"Gemini JSON 응답 파싱 실패: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ProviderError("Gemini JSON 응답의 최상위 값은 객체여야 합니다.")
+        diagnostics = self.response_diagnostics(payload)
+        self.last_diagnostics = diagnostics
+        log_generation_diagnostics("Gemini", diagnostics, log)
+        self._raise_for_finish_reason(diagnostics)
+        text = self.extract_text(payload)
         if on_chunk:
             on_chunk(text)
         if log:

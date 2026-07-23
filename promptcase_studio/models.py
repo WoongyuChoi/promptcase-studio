@@ -38,6 +38,7 @@ class ContextFile:
 class ScanBundle:
     changes: list[ChangeItem] = field(default_factory=list)
     contexts: list[ContextFile] = field(default_factory=list)
+    change_notes: list[str] = field(default_factory=list)
     scanned_files: int = 0
     excluded_files: int = 0
     truncated: bool = False
@@ -53,7 +54,8 @@ class AnalysisRequest:
     manual_changes: str
     request_text: str
     environment: str
-    since_date: date | None = None
+    date_from: date | None = None
+    date_to: date | None = None
     include_git: bool = True
 
 
@@ -62,6 +64,6 @@ class PipelineResult:
     run_id: str
     run_directory: Path
     document_path: Path
+    suggested_filename: str
     response_path: Path
     scan_bundle: ScanBundle
-

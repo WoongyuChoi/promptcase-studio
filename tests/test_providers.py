@@ -1,12 +1,15 @@
+import json
 import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
-from promptcase_studio.providers.base import ProviderError, open_with_retry
+from promptcase_studio.providers.base import ProviderError, open_with_retry, split_prompt_sections
 from promptcase_studio.providers.gemini import GeminiProvider
 from promptcase_studio.providers.qwen import QwenProvider, load_qwen_profile
+from promptcase_studio.response_parser import parse_structured_response
+from tests.test_response_parser import valid_payload
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -18,6 +21,26 @@ class FakeStream:
             [
                 b'data: {"choices":[{"delta":{"content":"{\\"ok\\":"},"finish_reason":null}]}\n',
                 b'data: {"choices":[{"delta":{"content":"true}"},"finish_reason":"stop"}]}\n',
+                b'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}\n',
+                b'data: [DONE]\n',
+            ]
+        )
+
+
+class FinishReasonThenUsageStream:
+    def __iter__(self):
+        yield b'data: {"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}\n'
+        yield b'data: {"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9}}\n'
+        yield b'data: [DONE]\n'
+
+
+class InterleavedChoiceStream:
+    def __iter__(self):
+        return iter(
+            [
+                b'data: {"choices":[{"index":1,"delta":{"content":"WRONG"},"finish_reason":"stop"}]}\n',
+                b'data: {"choices":[{"index":0,"delta":{"content":"RIGHT"},"finish_reason":"stop"}]}\n',
+                b'data: [DONE]\n',
             ]
         )
 
@@ -33,6 +56,42 @@ class ReadTimeoutResponse:
 
     def read(self):
         raise TimeoutError("response read timeout")
+
+
+class JsonResponse:
+    headers = {"Content-Type": "application/json; charset=utf-8"}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        return (
+            b'{"choices":[{"index":0,"message":{"content":"{\\"ok\\":true}"},'
+            b'"finish_reason":"stop"}],"usage":{"prompt_tokens":3,'
+            b'"completion_tokens":4,"total_tokens":7}}'
+        )
+
+
+class StaticResponse:
+    def __init__(self, payload, content_type="application/json; charset=utf-8", lines=None):
+        self.payload = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.headers = {"Content-Type": content_type}
+        self.lines = lines or []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        return self.payload
+
+    def __iter__(self):
+        return iter(self.lines)
 
 
 class ProviderParsingTests(unittest.TestCase):
@@ -52,6 +111,401 @@ class ProviderParsingTests(unittest.TestCase):
         self.assertEqual(text, '{"ok":true}')
         self.assertEqual("".join(chunks), text)
 
+    def test_qwen_sse_reads_usage_after_finish_reason_until_done(self):
+        text, diagnostics = QwenProvider._parse_stream(FinishReasonThenUsageStream(), None)
+        self.assertEqual(text, "done")
+        self.assertEqual(diagnostics.finish_reason, "stop")
+        self.assertEqual(diagnostics.prompt_tokens, 7)
+        self.assertEqual(diagnostics.completion_tokens, 2)
+        self.assertEqual(diagnostics.total_tokens, 9)
+
+    def test_qwen_reads_only_primary_choice_index_zero(self):
+        self.assertEqual(QwenProvider._read_stream(InterleavedChoiceStream(), None), "RIGHT")
+        self.assertEqual(
+            QwenProvider._read_json(
+                {
+                    "choices": [
+                        {"index": 1, "message": {"content": "WRONG"}},
+                        {
+                            "index": 0,
+                            "message": {"content": "RIGHT"},
+                            "finish_reason": "stop",
+                        },
+                    ]
+                }
+            ),
+            "RIGHT",
+        )
+
+    def test_qwen_applies_full_generation_config_to_headers_and_body(self):
+        provider = QwenProvider.__new__(QwenProvider)
+        provider.stream = True
+        provider.profile = {
+            "model": "fixture-model",
+            "apiKey": "fixture-key",
+            "generationConfig": {
+                "customHeaders": {
+                    "user-agent": "FixtureAgent/1.0",
+                    "X-Trace-Mode": "qa",
+                },
+                "samplingParams": {
+                    "temperature": 0.2,
+                    "stop": ["STOP_ONE", "STOP_TWO"],
+                },
+                "extra_body": {
+                    "temperature": 0.1,
+                    "top_k": 40,
+                    "stream": False,
+                },
+            },
+        }
+
+        body = provider._body("fixture prompt")
+        headers = provider._headers()
+
+        self.assertEqual(body["temperature"], 0.1)
+        self.assertEqual(body["stop"], ["STOP_ONE", "STOP_TWO"])
+        self.assertEqual(body["top_k"], 40)
+        self.assertFalse(body["stream"])
+        self.assertNotIn("stream_options", body)
+        self.assertNotIn("User-Agent", headers)
+        self.assertEqual(headers["user-agent"], "FixtureAgent/1.0")
+        self.assertEqual(headers["X-Trace-Mode"], "qa")
+        self.assertEqual(headers["Authorization"], "Bearer fixture-key")
+
+    def test_qwen_applies_configured_output_budget_only_when_profile_has_none(self):
+        provider = QwenProvider.__new__(QwenProvider)
+        provider.stream = False
+        provider.max_output_tokens = 16384
+        provider.profile = {
+            "model": "fixture-model",
+            "generationConfig": {"samplingParams": {"temperature": 0.1}},
+        }
+        self.assertEqual(provider._body("fixture prompt")["max_tokens"], 16384)
+
+        provider.profile["generationConfig"]["samplingParams"]["max_completion_tokens"] = 8192
+        body = provider._body("fixture prompt")
+        self.assertEqual(body["max_completion_tokens"], 8192)
+        self.assertNotIn("max_tokens", body)
+
+        provider.profile["generationConfig"] = {"max_tokens": 4096}
+        body = provider._body("fixture prompt")
+        self.assertEqual(body["max_tokens"], 4096)
+        self.assertNotIn("max_completion_tokens", body)
+
+    def test_qwen_rejects_unsafe_custom_header(self):
+        provider = QwenProvider.__new__(QwenProvider)
+        provider.profile = {
+            "apiKey": "",
+            "generationConfig": {"customHeaders": {"X-Trace": "value\r\ninjected: yes"}},
+        }
+        with self.assertRaisesRegex(ProviderError, "줄바꿈"):
+            provider._headers()
+
+    def test_gemini_and_qwen_json_envelopes_share_the_same_output_contract(self):
+        response_text = json.dumps(valid_payload(), ensure_ascii=False)
+        gemini_text = GeminiProvider.extract_text(
+            {"candidates": [{"content": {"parts": [{"text": response_text}]}}]}
+        )
+        qwen_text = QwenProvider._read_json(
+            {
+                "choices": [
+                    {"message": {"content": response_text}, "finish_reason": "stop"}
+                ]
+            }
+        )
+
+        self.assertEqual(
+            parse_structured_response(gemini_text),
+            parse_structured_response(qwen_text),
+        )
+
+    def test_prompt_split_uses_minimal_system_rule_without_delimiter(self):
+        system_prompt, user_prompt = split_prompt_sections("plain fixture prompt")
+        self.assertEqual(system_prompt, "응답은 요청된 JSON 객체 하나만 출력한다.")
+        self.assertEqual(user_prompt, "plain fixture prompt")
+
+    def test_provider_bodies_keep_unsplit_prompt_as_user_content(self):
+        response = StaticResponse(
+            {
+                "candidates": [
+                    {
+                        "content": {"parts": [{"text": "{\"ok\":true}"}]},
+                        "finishReason": "STOP",
+                    }
+                ]
+            }
+        )
+        gemini = GeminiProvider(
+            {"apiBase": "https://example.invalid", "model": "fixture-model"},
+            "fixture-key",
+        )
+        with patch(
+            "promptcase_studio.providers.gemini.open_with_retry",
+            return_value=response,
+        ) as gemini_open:
+            gemini.generate("plain fixture prompt")
+        gemini_body = json.loads(gemini_open.call_args.args[0].data.decode("utf-8"))
+        self.assertEqual(
+            gemini_body["system_instruction"]["parts"][0]["text"],
+            "응답은 요청된 JSON 객체 하나만 출력한다.",
+        )
+        self.assertEqual(
+            gemini_body["contents"][0]["parts"][0]["text"],
+            "plain fixture prompt",
+        )
+
+        qwen = QwenProvider(
+            {"stream": False},
+            PROJECT_ROOT / "config" / "qwen.settings.json",
+        )
+        qwen_body = qwen._body("plain fixture prompt")
+        self.assertEqual(
+            qwen_body["messages"][0]["content"],
+            "응답은 요청된 JSON 객체 하나만 출력한다.",
+        )
+        self.assertEqual(qwen_body["messages"][1]["content"], "plain fixture prompt")
+
+    def test_gemini_rejects_abnormal_finish_reasons_and_keeps_usage(self):
+        for finish_reason, expected_message in (
+            ("MAX_TOKENS", "출력 토큰 한도"),
+            ("SAFETY", "안전 정책"),
+            ("OTHER", "정상 종료되지"),
+        ):
+            with self.subTest(finish_reason=finish_reason):
+                provider = GeminiProvider(
+                    {"apiBase": "https://example.invalid", "model": "fixture-model"},
+                    "fixture-key",
+                )
+                response = StaticResponse(
+                    {
+                        "candidates": [
+                            {
+                                "content": {"parts": [{"text": "{\"partial\":true}"}]},
+                                "finishReason": finish_reason,
+                            }
+                        ],
+                        "usageMetadata": {
+                            "promptTokenCount": 50,
+                            "candidatesTokenCount": 25,
+                            "totalTokenCount": 75,
+                        },
+                    }
+                )
+                logs = []
+                with (
+                    patch(
+                        "promptcase_studio.providers.gemini.open_with_retry",
+                        return_value=response,
+                    ),
+                    self.assertRaisesRegex(ProviderError, expected_message),
+                ):
+                    provider.generate(
+                        "fixture prompt",
+                        log=lambda level, message: logs.append((level, message)),
+                    )
+                self.assertEqual(provider.last_diagnostics.finish_reason, finish_reason)
+                self.assertEqual(provider.last_diagnostics.total_tokens, 75)
+                self.assertTrue(any(finish_reason in message for _level, message in logs))
+
+    def test_qwen_json_rejects_abnormal_finish_reasons_and_keeps_usage(self):
+        for finish_reason, expected_message in (
+            ("length", "출력 토큰 한도"),
+            ("content_filter", "안전 정책"),
+            ("tool_calls", "정상 종료되지"),
+        ):
+            with self.subTest(finish_reason=finish_reason):
+                provider = QwenProvider(
+                    {"stream": False},
+                    PROJECT_ROOT / "config" / "qwen.settings.json",
+                )
+                response = StaticResponse(
+                    {
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {"content": "{\"partial\":true}"},
+                                "finish_reason": finish_reason,
+                            }
+                        ],
+                        "usage": {
+                            "prompt_tokens": 40,
+                            "completion_tokens": 20,
+                            "total_tokens": 60,
+                        },
+                    }
+                )
+                with (
+                    patch(
+                        "promptcase_studio.providers.qwen.open_with_retry",
+                        return_value=response,
+                    ),
+                    self.assertRaisesRegex(ProviderError, expected_message),
+                ):
+                    provider.generate("fixture prompt")
+                self.assertEqual(provider.last_diagnostics.finish_reason, finish_reason)
+                self.assertEqual(provider.last_diagnostics.total_tokens, 60)
+
+    def test_qwen_sse_rejects_length_after_collecting_usage(self):
+        lines = [
+            b'data: {"choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":"length"}]}\n',
+            b'data: {"choices":[],"usage":{"prompt_tokens":30,"completion_tokens":10,"total_tokens":40}}\n',
+            b"data: [DONE]\n",
+        ]
+        provider = QwenProvider(
+            {"stream": True},
+            PROJECT_ROOT / "config" / "qwen.settings.json",
+        )
+        response = StaticResponse({}, content_type="text/event-stream", lines=lines)
+        chunks = []
+        with (
+            patch(
+                "promptcase_studio.providers.qwen.open_with_retry",
+                return_value=response,
+            ),
+            self.assertRaisesRegex(ProviderError, "출력 토큰 한도"),
+        ):
+            provider.generate("fixture prompt", on_chunk=chunks.append)
+        self.assertEqual("".join(chunks), "partial")
+        self.assertEqual(provider.last_diagnostics.finish_reason, "length")
+        self.assertEqual(provider.last_diagnostics.total_tokens, 40)
+
+    def test_provider_generate_paths_preserve_the_full_structured_contract(self):
+        response_text = json.dumps(valid_payload(), ensure_ascii=False)
+        gemini_response = StaticResponse(
+            {
+                "candidates": [
+                    {
+                        "content": {"parts": [{"text": response_text}]},
+                        "finishReason": "STOP",
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 100,
+                    "candidatesTokenCount": 40,
+                    "totalTokenCount": 140,
+                },
+            }
+        )
+        gemini = GeminiProvider(
+            {
+                "apiBase": "https://example.invalid",
+                "model": "fixture-model",
+                "timeoutSeconds": 300,
+                "maxAttempts": 3,
+                "maxOutputTokens": 16384,
+            },
+            "fixture-key",
+        )
+        with patch(
+            "promptcase_studio.providers.gemini.open_with_retry",
+            return_value=gemini_response,
+        ) as gemini_open:
+            gemini_text = gemini.generate("system contract\n\n---\n\nfixture prompt")
+        gemini_request = gemini_open.call_args.args[0]
+        gemini_body = json.loads(gemini_request.data.decode("utf-8"))
+        self.assertEqual(gemini_body["generationConfig"]["responseMimeType"], "application/json")
+        self.assertEqual(gemini_body["generationConfig"]["maxOutputTokens"], 16384)
+        self.assertEqual(gemini_body["system_instruction"]["parts"][0]["text"], "system contract")
+        self.assertEqual(gemini_body["contents"][0]["parts"][0]["text"], "fixture prompt")
+        self.assertEqual(gemini.last_diagnostics.finish_reason, "STOP")
+        self.assertEqual(gemini.last_diagnostics.prompt_tokens, 100)
+        self.assertEqual(gemini.last_diagnostics.completion_tokens, 40)
+        self.assertEqual(gemini.last_diagnostics.total_tokens, 140)
+
+        qwen_json_response = StaticResponse(
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"content": response_text},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 90, "completion_tokens": 30, "total_tokens": 120},
+            }
+        )
+        qwen = QwenProvider(
+            {"stream": True, "maxOutputTokens": 16384},
+            PROJECT_ROOT / "config" / "qwen.settings.json",
+        )
+        with patch(
+            "promptcase_studio.providers.qwen.open_with_retry",
+            return_value=qwen_json_response,
+        ) as qwen_open:
+            qwen_json_text = qwen.generate("system contract\n\n---\n\nfixture prompt")
+        qwen_request = qwen_open.call_args.args[0]
+        qwen_body = json.loads(qwen_request.data.decode("utf-8"))
+        self.assertTrue(qwen_body["stream"])
+        self.assertEqual([message["role"] for message in qwen_body["messages"]], ["system", "user"])
+        self.assertEqual(qwen_body["messages"][0]["content"], "system contract")
+        self.assertEqual(qwen_body["messages"][1]["content"], "fixture prompt")
+        self.assertEqual(qwen_body["max_tokens"], 16384)
+        self.assertEqual(qwen.last_diagnostics.finish_reason, "stop")
+        self.assertEqual(qwen.last_diagnostics.total_tokens, 120)
+
+        midpoint = len(response_text) // 2
+        sse_lines = [
+            (
+                "data: "
+                + json.dumps(
+                    {
+                        "choices": [
+                            {"delta": {"content": response_text[:midpoint]}, "finish_reason": None}
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            ).encode("utf-8"),
+            (
+                "data: "
+                + json.dumps(
+                    {
+                        "choices": [
+                            {"delta": {"content": response_text[midpoint:]}, "finish_reason": "stop"}
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            ).encode("utf-8"),
+            (
+                "data: "
+                + json.dumps(
+                    {
+                        "choices": [],
+                        "usage": {
+                            "prompt_tokens": 91,
+                            "completion_tokens": 31,
+                            "total_tokens": 122,
+                        },
+                    }
+                )
+                + "\n"
+            ).encode("utf-8"),
+            b"data: [DONE]\n",
+        ]
+        qwen_sse_response = StaticResponse(
+            {},
+            content_type="text/event-stream; charset=utf-8",
+            lines=sse_lines,
+        )
+        with patch(
+            "promptcase_studio.providers.qwen.open_with_retry",
+            return_value=qwen_sse_response,
+        ):
+            qwen_sse_text = qwen.generate("fixture prompt")
+        self.assertEqual(qwen.last_diagnostics.finish_reason, "stop")
+        self.assertEqual(qwen.last_diagnostics.prompt_tokens, 91)
+        self.assertEqual(qwen.last_diagnostics.completion_tokens, 31)
+        self.assertEqual(qwen.last_diagnostics.total_tokens, 122)
+
+        expected = parse_structured_response(response_text)
+        self.assertEqual(parse_structured_response(gemini_text), expected)
+        self.assertEqual(parse_structured_response(qwen_json_text), expected)
+        self.assertEqual(parse_structured_response(qwen_sse_text), expected)
+
     def test_loads_repository_qwen_settings(self):
         profile = load_qwen_profile(PROJECT_ROOT / "config" / "qwen.settings.json")
         self.assertEqual(profile["model"], "qwen3.6-agent")
@@ -60,6 +514,14 @@ class ProviderParsingTests(unittest.TestCase):
         self.assertEqual(profile["timeoutMilliseconds"], 300000)
         provider = QwenProvider({}, PROJECT_ROOT / "config" / "qwen.settings.json")
         self.assertEqual(provider.timeout, 300)
+
+    @patch("promptcase_studio.providers.qwen.open_with_retry", return_value=JsonResponse())
+    def test_qwen_accepts_json_response_when_stream_was_requested(self, _open):
+        provider = QwenProvider(
+            {"stream": True},
+            PROJECT_ROOT / "config" / "qwen.settings.json",
+        )
+        self.assertEqual(provider.generate("test prompt"), '{"ok":true}')
 
     @patch("promptcase_studio.providers.base.time.sleep")
     @patch("promptcase_studio.providers.base.urllib.request.urlopen")
