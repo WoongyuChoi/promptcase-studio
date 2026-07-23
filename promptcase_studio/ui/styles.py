@@ -335,6 +335,15 @@ QTabWidget#settingsTabs QTabBar::tab {
     border-top-right-radius: 7px;
     font-size: 13px;
 }
+QTabWidget#settingsTabs QTabBar::tab:first {
+    min-width: 60px;
+}
+QTabWidget#settingsTabs QTabBar::tab:middle {
+    min-width: 120px;
+}
+QTabWidget#settingsTabs QTabBar::tab:last {
+    min-width: 120px;
+}
 QTabWidget#settingsTabs QTabBar::tab:selected {
     background: #FFFFFF;
     color: #172033;

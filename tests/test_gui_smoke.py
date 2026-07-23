@@ -521,6 +521,16 @@ class GuiSmokeTests(unittest.TestCase):
         tabs = dialog.findChild(QTabWidget)
         tabs.setCurrentIndex(0)
         self.app.processEvents()
+        tab_bar = tabs.tabBar()
+        for index in range(tab_bar.count()):
+            with self.subTest(tab=index):
+                text_width = tab_bar.fontMetrics().horizontalAdvance(
+                    tab_bar.tabText(index)
+                )
+                self.assertGreaterEqual(
+                    tab_bar.tabRect(index).width(),
+                    text_width + 32,
+                )
         self.assertEqual(dialog.qwen_settings_path.minimumHeight(), 28)
         self.assertEqual(dialog.qwen_settings_path.maximumHeight(), 28)
         self.assertEqual(dialog.quality_gate_mode.height(), 24)
