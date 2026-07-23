@@ -78,12 +78,58 @@ def build_release_note_prompt(
     return prompt
 
 
+def _json_object_brace_balance(text: str) -> int | None:
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth < 0:
+                return None
+    if in_string or escaped:
+        return None
+    return depth
+
+
+def _load_release_note_json(text: str) -> Any:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as original_error:
+        try:
+            value, end = json.JSONDecoder().raw_decode(text)
+        except json.JSONDecodeError:
+            value = None
+            end = 0
+        if isinstance(value, dict) and text[end:].strip() == "}":
+            return value
+
+        if _json_object_brace_balance(text) == 1:
+            try:
+                return json.loads(f"{text}}}")
+            except json.JSONDecodeError:
+                pass
+        raise original_error
+
+
 def parse_release_note_response(raw: str) -> dict[str, str]:
     text = raw.lstrip("\ufeff").strip()
-    if not text.startswith("{") or not text.endswith("}"):
+    if not text.startswith("{"):
         raise ReleaseNoteValidationError("릴리즈 노트 응답은 JSON 객체 하나여야 합니다.")
     try:
-        value = json.loads(text)
+        value = _load_release_note_json(text)
     except json.JSONDecodeError as exc:
         raise ReleaseNoteValidationError(f"릴리즈 노트 JSON 파싱 실패: {exc}") from exc
     if not isinstance(value, dict):

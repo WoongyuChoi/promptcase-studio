@@ -123,6 +123,9 @@ class ResponseParserTests(unittest.TestCase):
         payload["testCase"]["preconditions"][0] = (
             "비교 기준 데이터가 준비되어 있다"
         )
+        payload["testCase"]["expectedResult"] = (
+            "대표 실적이 반영되고 저장 후 모든 팝업이 닫힌다"
+        )
 
         result = parse_structured_response(json.dumps(payload, ensure_ascii=False))
 
@@ -133,6 +136,23 @@ class ResponseParserTests(unittest.TestCase):
         self.assertEqual(
             result["testCase"]["preconditions"][0],
             "비교 기준 데이터가 준비되어 있다",
+        )
+        self.assertEqual(
+            result["testCase"]["expectedResult"],
+            "대표 실적이 반영되고 저장 후 모든 팝업이 닫힌다",
+        )
+
+    def test_normalizes_harmless_human_text_formatting(self):
+        payload = valid_payload()
+        payload["testCase"]["procedure"][0] = (
+            "1.  사용자 조회 조건을 선택하고\n검색 버튼을 누른다."
+        )
+
+        result = parse_structured_response(json.dumps(payload, ensure_ascii=False))
+
+        self.assertEqual(
+            result["testCase"]["procedure"][0],
+            "사용자 조회 조건을 선택하고 검색 버튼을 누른다",
         )
 
     def test_processing_details_accepts_five_and_rejects_six(self):
@@ -173,8 +193,6 @@ class ResponseParserTests(unittest.TestCase):
             "사용자 *조회* 상태를 확인한다",
             "사용자 | 조회 상태를 확인한다",
             "사용자 \\ 조회 상태를 확인한다",
-            "1. 사용자 조회 상태를 확인한다",
-            "사용자 조회 상태를 확인한다.",
         ):
             with self.subTest(invalid=invalid):
                 payload = valid_payload()
@@ -184,8 +202,11 @@ class ResponseParserTests(unittest.TestCase):
 
         payload = valid_payload()
         payload["testResult"]["processingDetails"][0]["detail"] = "활성 상태 조건을 반영했다."
-        with self.assertRaises(ResponseValidationError):
-            parse_structured_response(json.dumps(payload, ensure_ascii=False))
+        result = parse_structured_response(json.dumps(payload, ensure_ascii=False))
+        self.assertEqual(
+            result["testResult"]["processingDetails"][0]["detail"],
+            "활성 상태 조건을 반영했다",
+        )
 
     def test_rejects_duplicate_and_generic_quality_failures(self):
         payload = valid_payload()

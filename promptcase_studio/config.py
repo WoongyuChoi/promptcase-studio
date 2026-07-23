@@ -54,14 +54,10 @@ def _user_data_root() -> Path:
     configured = os.environ.get(APP_DATA_ENV, "").strip()
     if configured:
         return Path(os.path.expandvars(configured)).expanduser().resolve()
-
-    if sys.platform == "win32":
-        local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
-        base = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
-    else:
-        xdg_data_home = os.environ.get("XDG_DATA_HOME", "").strip()
-        base = Path(xdg_data_home) if xdg_data_home else Path.home() / ".local" / "share"
-    return (base / APP_NAME).resolve()
+    # The packaged application is distributed as a portable folder. Keeping
+    # settings and generated artifacts beside the EXE makes that folder
+    # self-contained and easy to hand to another internal user.
+    return Path(sys.executable).resolve().parent
 
 
 def build_runtime_paths(
@@ -120,6 +116,9 @@ _MANAGED_FILES = (
 )
 _SEEDED_FILES = (("config/qwen.settings.json", "config/qwen.settings.json"),)
 _RESOURCE_STATE = "config/.bundled-resources.json"
+_PRIVATE_BUNDLE_DIRECTORY = "_private"
+_PRIVATE_DOTENV = f"{_PRIVATE_BUNDLE_DIRECTORY}/.env"
+_PRIVATE_QWEN_SETTINGS = f"{_PRIVATE_BUNDLE_DIRECTORY}/qwen.settings.json"
 
 
 def _copy_file_if_missing(source: Path, destination: Path) -> None:
@@ -256,13 +255,58 @@ def _ensure_qwen_timeout(path: Path) -> None:
         temporary.replace(path)
 
 
+def _read_dotenv_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            values[key] = value
+    return values
+
+
+def _seed_private_dotenv(source: Path, destination: Path) -> None:
+    """Seed bundled credentials without replacing values configured by a user."""
+
+    bundled = _read_dotenv_file(source)
+    if not bundled:
+        return
+    if not destination.exists():
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        return
+
+    existing = _read_dotenv_file(destination)
+    missing = {
+        key: value
+        for key, value in bundled.items()
+        if key not in existing and value
+    }
+    if not missing:
+        return
+    current_text = destination.read_text(encoding="utf-8-sig").rstrip()
+    additions = "\n".join(f"{key}={value}" for key, value in sorted(missing.items()))
+    destination.write_text(
+        f"{current_text}\n\n# Credentials seeded from the private company bundle.\n"
+        f"{additions}\n",
+        encoding="utf-8",
+    )
+
+
 def initialize_runtime_environment(paths: RuntimePaths = RUNTIME_PATHS) -> RuntimePaths:
     """Initialize a writable packaged-app workspace on first launch.
 
     Managed defaults are upgraded only while their previous copy is unchanged.
     User edits are preserved, and a legacy install without resource state is
     backed up before its defaults are migrated. Qwen connection settings are
-    seeded once and never replaced. Secrets are absent from every allowlist.
+    seeded once and never replaced. An explicitly built private company bundle
+    can also seed credentials that are missing from the user's data directory.
     """
 
     if not paths.frozen:
@@ -272,12 +316,22 @@ def initialize_runtime_environment(paths: RuntimePaths = RUNTIME_PATHS) -> Runti
         (paths.data_root / directory).mkdir(parents=True, exist_ok=True)
 
     _synchronize_managed_resources(paths)
+    private_qwen = paths.resource_root / _PRIVATE_QWEN_SETTINGS
     for source_relative, destination_relative in _SEEDED_FILES:
+        source = (
+            private_qwen
+            if source_relative == "config/qwen.settings.json" and private_qwen.is_file()
+            else paths.resource_root / source_relative
+        )
         _copy_file_if_missing(
-            paths.resource_root / source_relative,
+            source,
             paths.data_root / destination_relative,
         )
         _ensure_qwen_timeout(paths.data_root / destination_relative)
+    _seed_private_dotenv(
+        paths.resource_root / _PRIVATE_DOTENV,
+        paths.dotenv,
+    )
     return paths
 
 
@@ -359,19 +413,7 @@ def save_local_settings(settings: dict[str, Any]) -> None:
 
 def read_dotenv(path: Path | None = None) -> dict[str, str]:
     dotenv_path = DOTENV_PATH if path is None else path
-    values: dict[str, str] = {}
-    if not dotenv_path.exists():
-        return values
-    for raw_line in dotenv_path.read_text(encoding="utf-8-sig").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key:
-            values[key] = value
-    return values
+    return _read_dotenv_file(dotenv_path)
 
 
 def get_secret(name: str) -> str:

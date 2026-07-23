@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://promptcase-studio.local/schemas/test_case_response-2.1.0.json",
+  "$id": "https://promptcase-studio.local/schemas/test_case_response-2.1.1.json",
   "title": "Promptcase Studio Unit Test Response",
   "description": "사람이 작성한 형태의 한국어 단위테스트 문안 계약",
   "type": "object",
@@ -93,7 +93,7 @@
           "type": "string",
           "minLength": 10,
           "maxLength": 180,
-          "pattern": "^(?!\\s*(?:[-*#]|[0-9]+[.)]))(?=[^\\r\\n]*(?:한다|된다)$)[^\\r\\n\\u005c:;：；·ㆍ‧∙⋅○●•◦▪▫◆◇▶▷■□※★☆♥♡♠♣\\\"'“”‘’「」『』＂＇`*#><\\[\\]{}|~]+$"
+          "pattern": "^(?!\\s*(?:[-*#]|[0-9]+[.)]))(?=[^\\r\\n]*다$)[^\\r\\n\\u005c:;：；·ㆍ‧∙⋅○●•◦▪▫◆◇▶▷■□※★☆♥♡♠♣\\\"'“”‘’「」『』＂＇`*#><\\[\\]{}|~]+$"
         },
         "notes": {
           "type": "string",

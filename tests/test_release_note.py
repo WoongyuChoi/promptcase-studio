@@ -75,6 +75,34 @@ class ReleaseNoteTests(unittest.TestCase):
         self.assertTrue(release_note["body"].endswith("감사합니다."))
         self.assertIn("제목:", render_release_note(release_note))
 
+    def test_response_parser_repairs_one_duplicate_closing_brace(self):
+        raw = """{
+          "subject": "[공유] 사용자 저장 조건 변경",
+          "body": "안녕하세요.\\n\\n사용자 저장 조건 변경 사항을 공유드립니다.\\n\\n[변경 사항]\\n- 변경된 값이 없을 때 안내 메시지 표시\\n\\n[적용 범위]\\n- 사용자 정보 저장 기능\\n\\n[확인 요청 사항]\\n- 값을 바꾸지 않은 상태에서 저장해 주세요.\\n- 안내 메시지가 표시되는지 확인해 주세요.\\n\\n확인 중 문제나 예상과 다른 결과가 있으면 메일 또는 메신저로 알려주세요.\\n\\n감사합니다."
+        }}"""
+
+        release_note = parse_release_note_response(raw)
+
+        self.assertEqual(release_note["subject"], "[공유] 사용자 저장 조건 변경")
+
+    def test_response_parser_repairs_one_missing_closing_brace(self):
+        raw = """{
+          "subject": "[공유] 사용자 저장 조건 변경",
+          "body": "안녕하세요.\\n\\n사용자 저장 조건 변경 사항을 공유드립니다.\\n\\n[변경 사항]\\n- 변경된 값이 없을 때 안내 메시지 표시\\n\\n[적용 범위]\\n- 사용자 정보 저장 기능\\n\\n[확인 요청 사항]\\n- 값을 바꾸지 않은 상태에서 저장해 주세요.\\n- 안내 메시지가 표시되는지 확인해 주세요.\\n\\n확인 중 문제나 예상과 다른 결과가 있으면 메일 또는 메신저로 알려주세요.\\n\\n감사합니다.\""""
+
+        release_note = parse_release_note_response(raw)
+
+        self.assertEqual(release_note["subject"], "[공유] 사용자 저장 조건 변경")
+
+    def test_response_parser_rejects_multiple_json_objects(self):
+        raw = (
+            '{"subject":"[공유] 사용자 저장 조건 변경","body":"본문"}'
+            '{"subject":"[공유] 다른 변경","body":"다른 본문"}'
+        )
+
+        with self.assertRaises(ReleaseNoteValidationError):
+            parse_release_note_response(raw)
+
     def test_response_parser_rejects_ai_written_trace(self):
         raw = """{
           "subject": "[공유] 사용자 저장 조건 변경",

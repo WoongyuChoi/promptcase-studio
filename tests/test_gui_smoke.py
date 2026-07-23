@@ -18,6 +18,7 @@ from PyQt5.QtWidgets import (
     QToolButton,
 )
 
+from promptcase_studio import __version__
 from promptcase_studio.models import ChangeItem, PipelineResult, ScanBundle
 from promptcase_studio.scanner import collect_changes
 from promptcase_studio.ui.main_window import MainWindow, _wrap_alert_text
@@ -57,7 +58,7 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(window.terminal.status.property("state"), "ready")
         startup_text = window.terminal.output.toPlainText()
         self.assertIn("PROMPTCASE STUDIO", startup_text)
-        self.assertIn("(v0.1.0)", startup_text)
+        self.assertIn(f"(v{__version__})", startup_text)
         self.assertIn("[INFO] 실행 콘솔 준비 완료", startup_text)
         self.assertEqual(len(window.terminal._LOGO_COLUMNS), 10)
         self.assertEqual(len(window.terminal._LOGO_COLORS), 10)
@@ -142,6 +143,10 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertFalse(dialog.subject_edit.isReadOnly())
         self.assertFalse(dialog.body_edit.isReadOnly())
         self.assertFalse(dialog.copy_button.icon().isNull())
+        self.assertEqual(
+            dialog.close_button.font().pixelSize(),
+            dialog.copy_button.font().pixelSize(),
+        )
 
         dialog.subject_edit.setText("사용자가 수정한 제목")
         dialog.body_edit.setPlainText("사용자가 수정한 본문")

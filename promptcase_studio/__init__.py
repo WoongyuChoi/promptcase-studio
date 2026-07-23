@@ -1,4 +1,3 @@
 """Promptcase Studio application package."""
 
-__version__ = "0.1.0"
-
+__version__ = "3.3.4"

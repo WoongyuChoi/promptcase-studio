@@ -304,7 +304,7 @@ class SettingsDialog(QDialog):
         validation_row.setSpacing(8)
         validation_label = self._field_label("응답 형식 검증")
         self.validation_attempts = StepperSpinBox()
-        self.validation_attempts.setRange(1, 5)
+        self.validation_attempts.setRange(2, 5)
         self.validation_attempts.setSuffix(" 회")
         self.validation_attempts.setValue(int(self.settings.get("responseValidationAttempts", 3)))
         validation_row.addWidget(validation_label)
@@ -312,7 +312,7 @@ class SettingsDialog(QDialog):
         validation_row.addWidget(
             self._help_button(
                 "응답 형식 검증",
-                "JSON 계약 오류가 있으면 검증 오류를 전달해 응답 수정을 다시 요청합니다.",
+                "JSON 또는 근거 계약 오류가 있으면 오류를 전달해 응답 수정을 다시 요청합니다. 정상 응답에는 추가 호출이 없습니다.",
             )
         )
         validation_row.addStretch(1)

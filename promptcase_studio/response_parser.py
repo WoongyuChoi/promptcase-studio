@@ -130,18 +130,18 @@ def _human_text(
     text = _string(value, field, allow_empty=allow_empty)
     if not text and allow_empty:
         return ""
+    text = re.sub(r"[\r\n\t]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = LEADING_LIST_MARK.sub("", text, count=1).strip()
+    text = text.rstrip(".。").rstrip()
     if not minimum <= len(text) <= maximum:
         raise ResponseValidationError(f"{field} 길이는 {minimum}~{maximum}자여야 합니다.")
-    if any(character in text for character in "\r\n\t"):
-        raise ResponseValidationError(f"{field}는 줄바꿈 없이 한 줄로 작성해야 합니다.")
     if FORBIDDEN_DECORATION.search(text):
         raise ResponseValidationError(
             f"{field}에 콜론, 세미콜론, 가운데점, 장식 기호, Markdown 기호 또는 따옴표를 사용할 수 없습니다."
         )
     if text.endswith(ENDING_PUNCTUATION):
         raise ResponseValidationError(f"{field} 끝에 문장 부호를 붙이지 마세요.")
-    if LEADING_LIST_MARK.match(text):
-        raise ResponseValidationError(f"{field} 앞에 번호나 글머리 기호를 붙이지 마세요.")
     if text.endswith((".", ",", "!", "?", ";", "。", "，", "！", "？")):
         raise ResponseValidationError(f"{field} 끝에 불필요한 문장 부호를 붙이지 마세요.")
     if endings and not text.endswith(endings):
@@ -149,8 +149,6 @@ def _human_text(
         raise ResponseValidationError(f"{field}는 {ending_text}로 끝나는 완결된 문장이어야 합니다.")
     if text in GENERIC_ONLY:
         raise ResponseValidationError(f"{field}가 너무 일반적입니다. 확인 대상과 조건을 포함해 주세요.")
-    if re.search(r"\s{2,}", text):
-        raise ResponseValidationError(f"{field}에 불필요한 연속 공백이 있습니다.")
     return text
 
 
@@ -554,7 +552,7 @@ def parse_structured_response(raw: str, evidence_text: str | None = None) -> dic
                 "testCase.expectedResult",
                 minimum=10,
                 maximum=180,
-                endings=("한다", "된다"),
+                endings=("다",),
             ),
             _raw_string(test_case.get("expectedResult")),
         )

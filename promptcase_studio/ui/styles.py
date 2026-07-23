@@ -223,6 +223,13 @@ QPushButton#releaseNoteCopyButton:hover {
     background: #2D469B;
     border-color: #2D469B;
 }
+QPushButton#releaseNoteCloseButton {
+    background: #FFFFFF;
+    border-color: #CFD9E6;
+    color: #344054;
+    font-size: 13px;
+    font-weight: 650;
+}
 QLabel#releaseNoteCopyStatus {
     color: #176425;
     font-size: 12px;

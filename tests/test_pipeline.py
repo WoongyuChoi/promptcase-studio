@@ -349,7 +349,7 @@ class PipelineTests(unittest.TestCase):
         settings = deepcopy(load_settings())
         settings["mockMode"] = False
         settings["qualityReviewEnabled"] = False
-        settings["responseValidationAttempts"] = 2
+        settings["responseValidationAttempts"] = 1
         settings["templatePath"] = str(PROJECT_ROOT / "templates" / "unittest_template.xlsx")
         settings["runDirectory"] = str(case_directory / "runs")
         provider = InvalidThenValidProvider()

@@ -90,11 +90,11 @@ class ReleaseNoteDialog(QDialog):
         self.copy_status.setObjectName("releaseNoteCopyStatus")
         footer.addWidget(self.copy_status)
         footer.addStretch(1)
-        close_button = QPushButton("닫기")
-        close_button.setObjectName("dialogSecondaryButton")
-        close_button.setFixedSize(72, 32)
-        close_button.clicked.connect(self.reject)
-        footer.addWidget(close_button)
+        self.close_button = QPushButton("닫기")
+        self.close_button.setObjectName("releaseNoteCloseButton")
+        self.close_button.setFixedSize(72, 32)
+        self.close_button.clicked.connect(self.reject)
+        footer.addWidget(self.close_button)
         root.addLayout(footer)
 
     def mail_text(self) -> str:

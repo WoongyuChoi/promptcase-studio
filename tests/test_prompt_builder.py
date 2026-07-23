@@ -64,8 +64,8 @@ class PromptBuilderTests(unittest.TestCase):
             scanned_files=4,
         )
         prompt = build_prompt(bundle, "활성 사용자 조회 조건을 변경함")
-        self.assertIn("프롬프트 버전: 3.3.0", prompt)
-        self.assertIn("응답 스키마 버전: 2.1.0", prompt)
+        self.assertIn(f"프롬프트 버전: {__version__}", prompt)
+        self.assertIn("응답 스키마 버전: 2.1.1", prompt)
         self.assertIn("품질 정책 버전: 1.3.0", prompt)
         self.assertIn('"documentTitle"', prompt)
         self.assertIn("근거의 우선순위는 Git diff", prompt)
@@ -173,8 +173,8 @@ class PromptBuilderTests(unittest.TestCase):
             "사용자 조회 조건 변경 GEMINI_API_KEY=do-not-send-this-secret",
         )
 
-        self.assertIn("사업계획관리시스템", prompt)
-        self.assertNotIn("사업계획관리시스템", evidence)
+        self.assertNotIn("92886000", prompt)
+        self.assertNotIn("90124000", prompt)
         self.assertNotIn("do-not-send-this-secret", prompt)
         self.assertNotIn("do-not-send-this-secret", evidence)
         self.assertIn("[REDACTED]", evidence)
@@ -182,3 +182,4 @@ class PromptBuilderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+from promptcase_studio import __version__

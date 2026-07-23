@@ -35,3 +35,12 @@
 - provider는 mock으로 교체 가능해야 하며 Gemini/Qwen 응답 fixture를 별도로 검증한다.
 - 스캐너, 응답 parser, Excel 셀 매핑과 서식 보존을 회귀 테스트한다.
 - 실제 API 통합 테스트는 사용자가 명시적으로 실행할 때만 허용한다.
+
+## 버전 관리
+
+- 제품 버전은 `promptcase_studio/__init__.py`의 `__version__`을 source of truth로 사용한다.
+- `prompts/manifest.json`의 `bundleVersion`은 제품 버전과 항상 같아야 하며 `scripts/bump_version.py`로 함께 변경한다.
+- 호환성 파괴는 MAJOR, 사용자 기능 추가는 MINOR, 버그·UI·프롬프트·검증·패키징 개선은 PATCH를 올린다.
+- 문서와 테스트만 변경되고 배포 동작이 같으면 버전을 올리지 않는다.
+- 배포 가능한 변경을 마칠 때 변경 범위에 맞는 버전 증가 여부를 판단하고, 버전이 바뀌면 CLI, EXE 파일 속성, CHANGELOG에 반영한다.
+- Git 태그는 `vMAJOR.MINOR.PATCH` 형식을 사용하되 실제 태그 생성과 원격 반영은 사용자가 수행한다.

@@ -603,7 +603,10 @@ def run_pipeline(
     _log(log, "TRACE", f"프롬프트 미리보기\n{_preview(prompt)}")
 
     response_path = run_directory / "response.raw.txt"
-    validation_attempts = max(1, min(int(settings.get("responseValidationAttempts", 3)), 5))
+    # One malformed grounded response must not abort a long scan. A second
+    # attempt is only called when the first response fails the JSON/evidence
+    # contract, so successful runs still use a single draft request.
+    validation_attempts = max(2, min(int(settings.get("responseValidationAttempts", 3)), 5))
     try:
         provider = create_provider(settings, request.environment)
         _log(

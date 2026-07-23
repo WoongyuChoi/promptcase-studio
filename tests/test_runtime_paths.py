@@ -13,6 +13,7 @@ from promptcase_studio.config import (
     _replace_from_bundle,
     build_runtime_paths,
     initialize_runtime_environment,
+    read_dotenv,
     resolve_project_path,
     resource_path,
 )
@@ -109,6 +110,29 @@ class RuntimePathsTests(unittest.TestCase):
             self.assertEqual(resource_path("favicon.ico", paths), resources / "favicon.ico")
             self.assertEqual(resolve_project_path("outputs", paths), app_data / "outputs")
 
+    def test_frozen_mode_defaults_to_the_executable_directory(self) -> None:
+        with writable_test_directory() as base:
+            resources = base / "bundle"
+            executable = base / "portable" / "PromptcaseStudio.exe"
+            executable.parent.mkdir(parents=True)
+            with (
+                patch.dict("promptcase_studio.config.os.environ", {}, clear=True),
+                patch(
+                    "promptcase_studio.config.sys.executable",
+                    str(executable),
+                ),
+            ):
+                paths = build_runtime_paths(
+                    frozen=True,
+                    resource_root=resources,
+                )
+
+            self.assertEqual(paths.data_root, executable.parent.resolve())
+            self.assertEqual(
+                resolve_project_path("outputs", paths),
+                executable.parent / "outputs",
+            )
+
     def test_first_run_copies_public_resources_without_secrets(self) -> None:
         with writable_test_directory() as base:
             resources = base / "bundle"
@@ -149,6 +173,63 @@ class RuntimePathsTests(unittest.TestCase):
                 else:
                     self.assertTrue((app_data / relative).is_file(), relative)
             self.assertTrue((app_data / "config" / ".bundled-resources.json").is_file())
+
+    def test_private_company_bundle_seeds_missing_credentials_once(self) -> None:
+        with writable_test_directory() as base:
+            resources = base / "bundle"
+            app_data = base / "app-data"
+            public_qwen = resources / "config" / "qwen.settings.json"
+            private_qwen = resources / "_private" / "qwen.settings.json"
+            private_dotenv = resources / "_private" / ".env"
+            public_qwen.parent.mkdir(parents=True)
+            private_qwen.parent.mkdir(parents=True)
+            public_qwen.write_text('{"profile": "public"}', encoding="utf-8")
+            private_qwen.write_text('{"profile": "private"}', encoding="utf-8")
+            private_dotenv.write_text(
+                "GEMINI_API_KEY=company-gemini-key\n",
+                encoding="utf-8",
+            )
+            app_data.mkdir(parents=True)
+            (app_data / ".env").write_text("USER_SETTING=keep\n", encoding="utf-8")
+            paths = build_runtime_paths(
+                frozen=True,
+                resource_root=resources,
+                data_root=app_data,
+            )
+
+            initialize_runtime_environment(paths)
+
+            installed_qwen = app_data / "config" / "qwen.settings.json"
+            self.assertEqual(
+                installed_qwen.read_text(encoding="utf-8"),
+                '{"profile": "private"}',
+            )
+            self.assertEqual(read_dotenv(app_data / ".env")["USER_SETTING"], "keep")
+            self.assertEqual(
+                read_dotenv(app_data / ".env")["GEMINI_API_KEY"],
+                "company-gemini-key",
+            )
+
+            installed_qwen.write_text('{"profile": "user"}', encoding="utf-8")
+            (app_data / ".env").write_text(
+                "GEMINI_API_KEY=user-key\n",
+                encoding="utf-8",
+            )
+            private_qwen.write_text('{"profile": "new-private"}', encoding="utf-8")
+            private_dotenv.write_text(
+                "GEMINI_API_KEY=new-company-key\n",
+                encoding="utf-8",
+            )
+            initialize_runtime_environment(paths)
+
+            self.assertEqual(
+                installed_qwen.read_text(encoding="utf-8"),
+                '{"profile": "user"}',
+            )
+            self.assertEqual(
+                read_dotenv(app_data / ".env")["GEMINI_API_KEY"],
+                "user-key",
+            )
 
     def test_reinitialization_preserves_user_customizations(self) -> None:
         with writable_test_directory() as base:
