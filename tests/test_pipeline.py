@@ -6,12 +6,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from promptcase_studio.config import load_settings
-from promptcase_studio.models import AnalysisRequest, ChangeItem
+from promptcase_studio.models import AnalysisRequest, ChangeItem, ContextFile, ScanBundle
 from promptcase_studio.pipeline import (
     PipelinePausedError,
     _document_title,
     _program_category,
     _program_info,
+    _quality_sources_for_bundle,
     run_pipeline,
 )
 from promptcase_studio.providers.mock import MockProvider
@@ -29,6 +30,44 @@ TEMP_ROOT = PROJECT_ROOT / "tmp" / "tests"
 
 
 class PipelineTests(unittest.TestCase):
+    def test_quality_sources_require_primary_diff_support_for_broad_request_scenarios(self):
+        root = str(FIXTURE_ROOT.resolve())
+        bundle = ScanBundle(
+            changes=[
+                ChangeItem(
+                    root,
+                    "src/pages/MKPIM1110.tsx",
+                    "변경",
+                    "git-history",
+                    True,
+                    commit="target123",
+                    relevance_score=80,
+                )
+            ],
+            contexts=[
+                ContextFile(
+                    root,
+                    "src/pages/MKPIM1110.tsx",
+                    "diff",
+                    "선택 커밋",
+                    1000,
+                    "if (!hasChanges) alert('저장할 변경 사항이 없습니다')",
+                )
+            ],
+            change_notes=["feat: 저장 시 변경된 사항이 없으면 Alert 처리"],
+        )
+        request = (
+            "사업계획관리시스템 구축을 위한 기반사항 반영 요청\n"
+            "권한, 메뉴, 사용자 기반 사항 변경 요청\n"
+            "저장할 변경 사항이 없을 때 Alert 처리 요청"
+        )
+
+        sources = _quality_sources_for_bundle(request, bundle)
+
+        self.assertIn(bundle.change_notes[0], sources)
+        self.assertTrue(any("Alert 처리" in source for source in sources))
+        self.assertFalse(any("권한" in source for source in sources))
+
     def test_pipeline_rejects_incomplete_or_reversed_date_range_before_creating_a_run(self):
         settings = deepcopy(load_settings())
         settings["runDirectory"] = str(TEMP_ROOT / "invalid-date-range" / "runs")
@@ -275,6 +314,7 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue((result.run_directory / "evidence.txt").exists())
         self.assertTrue((result.run_directory / "quality-review.json").exists())
         self.assertTrue((result.run_directory / "prompt.quality-review.md").exists())
+        self.assertTrue((result.run_directory / "scope_decision.json").exists())
         self.assertTrue((result.run_directory / "pipeline.log").exists())
         document = json.loads((result.run_directory / "document.json").read_text(encoding="utf-8"))
         self.assertEqual(document["programInfo"][0]["project"], "sample_project")

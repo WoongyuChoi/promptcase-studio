@@ -44,6 +44,10 @@
     "relatedContextRatio": 0.25,
     "maxContextChars": 360000,
     "maxDiffChars": 32000,
+    "maxSelectedCommits": 3,
+    "maxSelectedFiles": 24,
+    "commitEvidenceShortlist": 12,
+    "maxCommitEvidenceChars": 40000,
     "maxContentScanFiles": 10000,
     "maxSourceScanChars": 320000
   },

@@ -102,7 +102,11 @@ QLabel#tooltipBody {
     font-size: 12px;
     font-weight: 600;
 }
-QLabel#progressLabel { color: #7B8798; font-size: 12px; }
+QLabel#progressLabel {
+    color: #7B8798;
+    font-size: 10px;
+    font-weight: 700;
+}
 QFrame#progressCluster {
     background: #F7F9FC;
     border: 1px solid #DFE7F0;

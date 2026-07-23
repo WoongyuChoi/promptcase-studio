@@ -19,6 +19,9 @@ class ChangeItem:
     exists: bool
     modified_at: str = ""
     note: str = ""
+    commit: str = ""
+    relevance_score: int = 0
+    selection_reason: str = ""
 
     def key(self) -> tuple[str, str]:
         return (self.root.casefold(), self.path.replace("\\", "/").casefold())

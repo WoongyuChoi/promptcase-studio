@@ -20,6 +20,7 @@ from promptcase_studio.scanner import (
     _focused_excerpt,
     _redact_sensitive_text,
     _read_text,
+    _text_similarity,
     _git_diff,
     build_scan_bundle,
     collect_changes,
@@ -49,6 +50,17 @@ def workspace_temporary_directory():
 
 
 class ScannerTests(unittest.TestCase):
+    def test_korean_ngram_similarity_tolerates_spacing_and_partial_wording(self):
+        query = "저장시 변경사항 없으면 알림"
+        matching = "feat: 저장 시 변경된 사항이 없으면 Alert 처리"
+        unrelated = "feat: 사용자 권한과 메뉴 기반 사항 반영"
+
+        self.assertGreater(_text_similarity(query, matching), 0.35)
+        self.assertGreater(
+            _text_similarity(query, matching),
+            _text_similarity(query, unrelated) + 0.2,
+        )
+
     def test_reads_bom_declared_utf8_and_cp949_sources_without_replacement(self):
         samples = {
             "utf8-bom.xml": codecs.BOM_UTF8
@@ -629,6 +641,94 @@ Authorization: Bearer abcdefghijklmnopqrstuvwxyz
         self.assertEqual(by_path["src/service/UserService.java"].change_type, "변경")
         self.assertEqual(by_path["src/service/NewService.java"].change_type, "신규")
         self.assertEqual(by_path["src/service/LegacyService.java"].change_type, "삭제")
+
+    @patch("promptcase_studio.scanner.is_git_repository", return_value=True)
+    @patch("promptcase_studio.scanner._run_git")
+    def test_git_scope_ranking_selects_matching_commit_instead_of_whole_date_range(
+        self,
+        run_git,
+        _is_repo,
+    ):
+        def fake_git(_root, args):
+            if "--show-toplevel" in args:
+                return str(FIXTURE_ROOT.resolve())
+            if "status" in args:
+                return ""
+            if "log" in args:
+                return (
+                    "@@PROMPTCASE-COMMIT@@target123\t2026-07-22T10:00:00+09:00\t"
+                    "feat: 저장 시 변경된 사항이 없으면 Alert 처리\n"
+                    "M\tsrc/service/UserService.java\n"
+                    "M\tsrc/dto/UserDto.java\n"
+                    "@@PROMPTCASE-COMMIT@@noise456\t2026-07-21T10:00:00+09:00\t"
+                    "feat: 사용자 권한 메뉴 기반 반영\n"
+                    "M\tsrc/controller/UserController.java\n"
+                    "M\tsrc/mapper/UserMapper.java\n"
+                )
+            if "show" in args:
+                commit = next(
+                    value for value in args if value in {"target123", "noise456"}
+                )
+                if commit == "target123":
+                    return (
+                        "feat: 저장 시 변경된 사항이 없으면 Alert 처리\n"
+                        "+if (!hasChanges) alert('저장할 변경 사항이 없습니다')\n"
+                    )
+                return "+권한과 메뉴 데이터를 조회한다\n"
+            raise AssertionError(args)
+
+        run_git.side_effect = fake_git
+        changes = collect_git_changes(
+            FIXTURE_ROOT.resolve(),
+            date(2026, 7, 20),
+            date(2026, 7, 23),
+            change_notes=["feat: 저장 시 변경된 사항이 없으면 Alert 처리"],
+            request_text="권한, 메뉴, 사용자 기반 사항도 포함하는 사업계획관리 요청",
+            scanner_settings={"maxSelectedCommits": 3, "commitEvidenceShortlist": 12},
+        )
+
+        self.assertEqual({item.commit for item in changes}, {"target123"})
+        self.assertEqual(
+            {item.path for item in changes},
+            {"src/service/UserService.java", "src/dto/UserDto.java"},
+        )
+        self.assertTrue(all(item.relevance_score >= 35 for item in changes))
+        self.assertTrue(all("커밋 target12" in item.selection_reason for item in changes))
+
+    @patch("promptcase_studio.scanner.collect_date_changes")
+    @patch("promptcase_studio.scanner.collect_git_changes")
+    @patch("promptcase_studio.scanner.is_git_repository", return_value=True)
+    def test_modified_dates_are_not_merged_when_git_is_available(
+        self,
+        _is_repo,
+        collect_git,
+        collect_date,
+    ):
+        root = FIXTURE_ROOT.resolve()
+        collect_git.return_value = [
+            ChangeItem(
+                str(root),
+                "src/service/UserService.java",
+                "변경",
+                "git-history",
+                True,
+                commit="target123",
+                relevance_score=80,
+            )
+        ]
+
+        changes, _indexes, _excluded, _truncated = collect_changes(
+            [root],
+            "feat: 저장 변경 없음 알림",
+            date(2026, 7, 20),
+            date(2026, 7, 23),
+            True,
+            {"maxCandidateFiles": 100},
+            request_text="넓은 시스템 기반 변경 요청",
+        )
+
+        collect_date.assert_not_called()
+        self.assertEqual([item.path for item in changes], ["src/service/UserService.java"])
 
     @patch("promptcase_studio.scanner._run_git")
     def test_git_diff_combines_committed_and_working_changes_from_date_base(self, run_git):

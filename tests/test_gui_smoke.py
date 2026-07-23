@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import (
 
 from promptcase_studio.models import ChangeItem, PipelineResult, ScanBundle
 from promptcase_studio.scanner import collect_changes
-from promptcase_studio.ui.main_window import MainWindow
+from promptcase_studio.ui.main_window import MainWindow, _wrap_alert_text
 from promptcase_studio.ui.settings_dialog import SettingsDialog
 from promptcase_studio.ui.styles import APP_STYLESHEET
 from promptcase_studio.ui.tooltip import HelpTooltipButton
@@ -441,6 +441,12 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(
             window.progress.parentWidget().parentWidget().objectName(), "card"
         )
+        self.assertEqual(window.progress_label.text(), "PROGRESS")
+        self.assertGreater(
+            window.progress.geometry().top(),
+            window.progress_label.geometry().bottom(),
+        )
+        self.assertEqual(window.progress.width(), 116)
         self.assertLess(window.secure_radio.geometry().x(), window.online_radio.geometry().x())
         self.assertGreater(window.git_checkbox.geometry().y(), window.date_checkbox.geometry().y())
         self.assertEqual(window.run_button.width(), 90)
@@ -683,6 +689,22 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertNotIn(
             "QDialog#settingsDialog QComboBox::drop-down",
             APP_STYLESHEET,
+        )
+
+    def test_long_alert_message_wraps_within_a_bounded_width(self):
+        message = (
+            "저장 경로와 처리 결과를 확인해 주세요. "
+            + "C:/Project/very-long-project-name/deeply/nested/output/"
+            + ("generated-test-case-" * 12)
+            + ".xlsx"
+        )
+        wrapped = _wrap_alert_text(message)
+
+        self.assertIn("\n", wrapped)
+        self.assertTrue(all(len(line) <= 48 for line in wrapped.splitlines()))
+        self.assertEqual(
+            "".join(wrapped.split()),
+            "".join(message.split()),
         )
 
     def test_git_import_keeps_the_origin_root_for_duplicate_relative_paths(self):

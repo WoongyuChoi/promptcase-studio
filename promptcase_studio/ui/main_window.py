@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import os
 import shutil
+import textwrap
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -80,6 +81,31 @@ LOG_COLORS = {
     "TRACE": "#64748B",
     "INFO": "#94A3B8",
 }
+
+
+def _wrap_alert_text(message: object, width: int = 48) -> str:
+    """Wrap alert paragraphs, including long paths without natural spaces."""
+    wrapped_lines: list[str] = []
+    for paragraph in str(message).splitlines():
+        if not paragraph:
+            wrapped_lines.append("")
+            continue
+        wrapped_lines.extend(
+            textwrap.wrap(
+                paragraph,
+                width=width,
+                break_long_words=True,
+                break_on_hyphens=False,
+                replace_whitespace=False,
+                drop_whitespace=True,
+            )
+            or [""]
+        )
+    return "\n".join(wrapped_lines)
+
+
+def _show_alert(method, parent, title: str, message: object, *args):
+    return method(parent, title, _wrap_alert_text(message), *args)
 
 
 def _validated_atomic_copy(source: Path, destination: Path) -> None:
@@ -612,17 +638,20 @@ class MainWindow(QMainWindow):
     def _build_environment_card(self) -> QFrame:
         progress_cluster = QFrame()
         progress_cluster.setObjectName("progressCluster")
-        progress_layout = QHBoxLayout(progress_cluster)
-        progress_layout.setContentsMargins(8, 3, 8, 3)
-        progress_layout.setSpacing(8)
-        self.progress_label = QLabel("진행")
+        progress_cluster.setFixedHeight(26)
+        progress_layout = QVBoxLayout(progress_cluster)
+        progress_layout.setContentsMargins(9, 2, 9, 2)
+        progress_layout.setSpacing(2)
+        self.progress_label = QLabel("PROGRESS")
         self.progress_label.setObjectName("progressLabel")
+        self.progress_label.setFixedHeight(12)
+        self.progress_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.progress = QProgressBar()
         self.progress.setObjectName("miniProgress")
         self.progress.setTextVisible(False)
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
-        self.progress.setFixedSize(100, 8)
+        self.progress.setFixedSize(116, 8)
         progress_layout.addWidget(self.progress_label)
         progress_layout.addWidget(self.progress)
 
@@ -809,7 +838,8 @@ class MainWindow(QMainWindow):
         date_from, date_to = self._selected_date_range()
         if date_from is None or date_to is None or date_from <= date_to:
             return True
-        QMessageBox.warning(
+        _show_alert(
+            QMessageBox.warning,
             self,
             "날짜 범위 확인",
             "종료일은 시작일과 같거나 이후 날짜로 선택해 주세요.",
@@ -824,7 +854,12 @@ class MainWindow(QMainWindow):
             return
         roots = self._selected_roots(report_skipped=True)
         if not roots:
-            QMessageBox.information(self, "Git 변경", "유효한 분석 대상 경로를 먼저 입력해 주세요.")
+            _show_alert(
+                QMessageBox.information,
+                self,
+                "Git 변경",
+                "유효한 분석 대상 경로를 먼저 입력해 주세요.",
+            )
             return
         if not self._validate_date_range():
             return
@@ -846,10 +881,15 @@ class MainWindow(QMainWindow):
             self.manual_changes.setPlainText(combined)
             self.terminal.append_log("GIT", f"입력란에 Git 변경 {len(records)}개 반영")
         else:
-            QMessageBox.information(self, "Git Diff", "불러올 Git 변경사항이 없습니다.")
+            _show_alert(
+                QMessageBox.information,
+                self,
+                "Git Diff",
+                "불러올 Git 변경사항이 없습니다.",
+            )
 
     def _git_diff_failed(self, message: str) -> None:
-        QMessageBox.critical(self, "Git 변경 조회 실패", message)
+        _show_alert(QMessageBox.critical, self, "Git 변경 조회 실패", message)
 
     def _git_diff_finished(self) -> None:
         self.diff_button.setEnabled(True)
@@ -861,15 +901,30 @@ class MainWindow(QMainWindow):
 
     def _start_pipeline(self) -> None:
         if self.git_worker is not None and self.git_worker.isRunning():
-            QMessageBox.information(self, "Git 변경 조회", "Git 변경 조회가 끝난 뒤 분석을 시작해 주세요.")
+            _show_alert(
+                QMessageBox.information,
+                self,
+                "Git 변경 조회",
+                "Git 변경 조회가 끝난 뒤 분석을 시작해 주세요.",
+            )
             return
         roots = self._selected_roots(report_skipped=True)
         request_text = self.request_text.toPlainText().strip()
         if not roots:
-            QMessageBox.warning(self, "입력 확인", "유효한 분석 대상 폴더를 한 개 이상 입력해 주세요.")
+            _show_alert(
+                QMessageBox.warning,
+                self,
+                "입력 확인",
+                "유효한 분석 대상 폴더를 한 개 이상 입력해 주세요.",
+            )
             return
         if not request_text:
-            QMessageBox.warning(self, "입력 확인", "변경 로직 또는 의뢰서 내용을 입력해 주세요.")
+            _show_alert(
+                QMessageBox.warning,
+                self,
+                "입력 확인",
+                "변경 로직 또는 의뢰서 내용을 입력해 주세요.",
+            )
             return
         if not self._validate_date_range():
             return
@@ -918,7 +973,8 @@ class MainWindow(QMainWindow):
         self.current_run_succeeded = True
         self.download_button.setEnabled(True)
         if result.quality_status == "review_required":
-            QMessageBox.warning(
+            _show_alert(
+                QMessageBox.warning,
                 self,
                 "검토 필요 초안 생성 완료",
                 "다운로드 가능한 최선의 초안을 생성했습니다.\n"
@@ -927,7 +983,8 @@ class MainWindow(QMainWindow):
                 "저장 후 실행 폴더의 품질 진단과 문안을 함께 확인해 주세요.",
             )
             return
-        QMessageBox.information(
+        _show_alert(
+            QMessageBox.information,
             self,
             "분석 완료",
             "단위테스트 초안을 완성했습니다.\n"
@@ -937,9 +994,14 @@ class MainWindow(QMainWindow):
     def _pipeline_failed(self, message: str) -> None:
         self.terminal.set_status("error")
         if "일일 요청 한도" in message or "AI 사용량 한도" in message:
-            QMessageBox.warning(self, "AI 사용량 한도 도달", message)
+            _show_alert(
+                QMessageBox.warning,
+                self,
+                "AI 사용량 한도 도달",
+                message,
+            )
             return
-        QMessageBox.critical(self, "작업 실패", message)
+        _show_alert(QMessageBox.critical, self, "작업 실패", message)
 
     def _worker_finished(self) -> None:
         self._progress_timer.stop()
@@ -981,7 +1043,12 @@ class MainWindow(QMainWindow):
 
     def _download_test_case(self) -> None:
         if not self.last_result or not self.last_result.document_path.exists():
-            QMessageBox.warning(self, "다운로드 확인", "먼저 변경 분석을 완료해 주세요.")
+            _show_alert(
+                QMessageBox.warning,
+                self,
+                "다운로드 확인",
+                "먼저 변경 분석을 완료해 주세요.",
+            )
             return
         default_path = self._default_save_directory() / self.last_result.suggested_filename
         selected, _ = QFileDialog.getSaveFileName(
@@ -999,10 +1066,15 @@ class MainWindow(QMainWindow):
             _validated_atomic_copy(self.last_result.document_path, destination)
         except Exception as exc:
             self.terminal.append_log("ERROR", f"테스트케이스 저장 실패: {exc}")
-            QMessageBox.critical(self, "저장 실패", str(exc))
+            _show_alert(QMessageBox.critical, self, "저장 실패", exc)
             return
         self.terminal.append_log("DONE", f"테스트케이스 저장 완료: {destination}")
-        QMessageBox.information(self, "저장 완료", f"테스트케이스를 저장했습니다.\n{destination}")
+        _show_alert(
+            QMessageBox.information,
+            self,
+            "저장 완료",
+            f"테스트케이스를 저장했습니다.\n{destination}",
+        )
         self._open_saved_directory(destination.parent)
 
     def _download_template(self) -> None:
@@ -1010,7 +1082,12 @@ class MainWindow(QMainWindow):
             self.settings.get("templatePath", UNIT_TEST_TEMPLATE.relative_path)
         )
         if not source.exists():
-            QMessageBox.critical(self, "템플릿 오류", f"템플릿을 찾을 수 없습니다.\n{source}")
+            _show_alert(
+                QMessageBox.critical,
+                self,
+                "템플릿 오류",
+                f"템플릿을 찾을 수 없습니다.\n{source}",
+            )
             return
         default_path = self._default_save_directory() / UNIT_TEST_TEMPLATE.download_name
         selected, _ = QFileDialog.getSaveFileName(
@@ -1028,10 +1105,15 @@ class MainWindow(QMainWindow):
             _validated_atomic_copy(source, destination)
         except Exception as exc:
             self.terminal.append_log("ERROR", f"템플릿 저장 실패: {exc}")
-            QMessageBox.critical(self, "저장 실패", str(exc))
+            _show_alert(QMessageBox.critical, self, "저장 실패", exc)
             return
         self.terminal.append_log("DONE", f"템플릿 저장 완료: {destination}")
-        QMessageBox.information(self, "저장 완료", f"템플릿을 저장했습니다.\n{destination}")
+        _show_alert(
+            QMessageBox.information,
+            self,
+            "저장 완료",
+            f"템플릿을 저장했습니다.\n{destination}",
+        )
 
     def _open_settings(self) -> None:
         dialog = SettingsDialog(self.settings, self)
@@ -1045,7 +1127,8 @@ class MainWindow(QMainWindow):
         pipeline_running = self.worker is not None and self.worker.isRunning()
         git_running = self.git_worker is not None and self.git_worker.isRunning()
         if pipeline_running or git_running:
-            answer = QMessageBox.question(
+            answer = _show_alert(
+                QMessageBox.question,
                 self,
                 "작업 진행 중",
                 "진행 중인 작업이 끝난 뒤 안전하게 종료합니다. 종료를 예약하시겠습니까?",

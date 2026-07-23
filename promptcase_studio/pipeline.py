@@ -336,6 +336,105 @@ def _quality_rank(report: dict[str, Any]) -> tuple[int, int, int, int, int]:
     )
 
 
+QUALITY_SOURCE_STOP_TERMS = {
+    "개발",
+    "관리",
+    "관련",
+    "기반",
+    "내용",
+    "대한",
+    "따른",
+    "목적",
+    "반영",
+    "사항",
+    "시스템",
+    "업무",
+    "요건",
+    "요청",
+    "적용",
+    "변경",
+    "위한",
+    "처리",
+    "결과",
+    "프로그램",
+    "확인",
+    "확인한다",
+}
+QUALITY_SOURCE_ALIASES = {
+    "권한": ("permission", "authority", "role", "auth"),
+    "메뉴": ("menu", "navigation"),
+    "사용자": ("user", "member"),
+    "활성": ("active", "enabled"),
+    "비활성": ("inactive", "disabled", "active"),
+    "조회": ("find", "select", "search", "query", "fetch", "load"),
+    "저장": ("save", "persist", "insert", "update"),
+    "삭제": ("delete", "remove"),
+    "알림": ("alert", "dialog", "message", "toast"),
+}
+
+
+def _quality_source_tokens(value: str) -> list[str]:
+    expanded = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", value)
+    values: list[str] = []
+    for raw in re.findall(r"[A-Za-z][A-Za-z0-9_$.-]*|[가-힣]{2,}|[0-9]+", expanded):
+        token = raw.casefold().strip("._-$")
+        if len(token) >= 2 and token not in QUALITY_SOURCE_STOP_TERMS:
+            values.append(token)
+    return list(dict.fromkeys(values))
+
+
+def _quality_sources_for_bundle(request_text: str, bundle: Any) -> list[str]:
+    """Keep broad request prose as background unless selected code supports it."""
+
+    sources = [str(note) for note in bundle.change_notes if str(note).strip()]
+    primary_by_key = {
+        (str(change.root).casefold(), str(change.path).replace("\\", "/").casefold()): change
+        for change in bundle.changes
+    }
+    evidence_parts = [
+        f"{change.path} {change.selection_reason}"
+        for change in bundle.changes
+    ]
+    for context in bundle.contexts:
+        key = (
+            str(context.root).casefold(),
+            str(context.path).replace("\\", "/").casefold(),
+        )
+        change = primary_by_key.get(key)
+        if change is None:
+            continue
+        excerpt = context.excerpt
+        if change.source == "git-history" and "[Git diff]" in excerpt:
+            excerpt = excerpt.split("[Git diff]", 1)[1].split("[현재 소스]", 1)[0]
+        evidence_parts.append(f"{context.path}\n{excerpt}")
+    evidence = "\n".join(evidence_parts).casefold()
+    evidence_tokens = set(_quality_source_tokens(evidence))
+
+    def supported(token: str) -> bool:
+        if token in evidence_tokens or token in evidence:
+            return True
+        return any(
+            keyword in token and any(alias in evidence for alias in aliases)
+            for keyword, aliases in QUALITY_SOURCE_ALIASES.items()
+        )
+
+    for raw_line in request_text.splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip(" -*\t")
+        if not line:
+            continue
+        tokens = _quality_source_tokens(line)
+        matched = [token for token in tokens if supported(token)]
+        distinctive_identifier = any(
+            token in evidence
+            for token in tokens
+            if len(token) >= 5 and re.search(r"[a-z0-9]", token)
+        )
+        required_matches = 1 if len(tokens) <= 2 else 2
+        if distinctive_identifier or len(matched) >= required_matches:
+            sources.append(line)
+    return list(dict.fromkeys(sources))
+
+
 def _log_scan_details(bundle: Any, callback: LogCallback | None) -> None:
     counts = Counter(item.change_type for item in bundle.changes)
     breakdown = ", ".join(f"{key} {value}개" for key, value in sorted(counts.items())) or "변경 없음"
@@ -470,7 +569,16 @@ def run_pipeline(
         (run_directory / "response.draft.txt").write_text(response_text, encoding="utf-8")
         response_path.write_text(response_text, encoding="utf-8")
 
-        quality_sources = [request.request_text, *bundle.change_notes]
+        quality_sources = _quality_sources_for_bundle(request.request_text, bundle)
+        request_line_count = sum(bool(line.strip()) for line in request.request_text.splitlines())
+        supported_request_count = max(0, len(quality_sources) - len(bundle.change_notes))
+        if request_line_count > supported_request_count:
+            _log(
+                log,
+                "QUALITY",
+                f"개발 의뢰 {request_line_count}개 문장 중 변경 근거가 확인된 "
+                f"{supported_request_count}개만 필수 품질 시나리오로 사용",
+            )
         draft_report = build_quality_report(structured, bundle.changes, quality_sources)
         selected_report = draft_report
         selected_phase = "draft"
