@@ -9,6 +9,7 @@ from unittest.mock import patch
 from promptcase_studio.providers.base import (
     ProviderError,
     ProviderRateLimitError,
+    ProviderUnavailableError,
     open_with_retry,
     split_prompt_sections,
 )
@@ -353,6 +354,57 @@ class ProviderParsingTests(unittest.TestCase):
         self.assertEqual(open_retry.call_count, 1)
         self.assertFalse(provider.auto_model_selection)
         self.assertEqual(provider.models, ("gemini-3.5-flash-lite",))
+
+    @patch("promptcase_studio.providers.gemini.open_with_retry")
+    def test_gemini_auto_switches_to_lite_after_503_retries_are_exhausted(
+        self, open_retry
+    ):
+        response_payload = {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "{\"ok\":true}"}]},
+                    "finishReason": "STOP",
+                }
+            ]
+        }
+        open_retry.side_effect = [
+            ProviderUnavailableError(
+                "Gemini",
+                status_code=503,
+                detail="This model is currently experiencing high demand.",
+            ),
+            StaticResponse(response_payload),
+        ]
+        provider = GeminiProvider(
+            {
+                "apiBase": "https://example.invalid",
+                "model": "auto",
+                "fallbackModels": [
+                    "gemini-3.5-flash",
+                    "gemini-3.5-flash-lite",
+                ],
+            },
+            "fixture-key",
+        )
+        provider._active_model_index = 1
+        logs = []
+
+        result = provider.generate(
+            "fixture prompt",
+            log=lambda level, message: logs.append((level, message)),
+        )
+
+        requested_urls = [call.args[0].full_url for call in open_retry.call_args_list]
+        self.assertEqual(result, '{"ok":true}')
+        self.assertIn("gemini-3.5-flash:generateContent", requested_urls[0])
+        self.assertIn("gemini-3.5-flash-lite:generateContent", requested_urls[1])
+        self.assertEqual(provider.model, "gemini-3.5-flash-lite")
+        self.assertTrue(
+            any(
+                level == "FALLBACK" and "서버 과부하" in message
+                for level, message in logs
+            )
+        )
 
     @patch("promptcase_studio.providers.gemini.open_with_retry")
     def test_gemini_reports_quota_after_all_configured_models_are_exhausted(self, open_retry):
@@ -765,6 +817,43 @@ class ProviderParsingTests(unittest.TestCase):
         self.assertAlmostEqual(raised.exception.retry_after_seconds or 0, 50.154492449)
         self.assertIn("20건을 모두", str(raised.exception))
         self.assertNotIn("20건를", str(raised.exception))
+
+    @patch("promptcase_studio.providers.base.time.sleep")
+    @patch("promptcase_studio.providers.base.urllib.request.urlopen")
+    def test_503_retries_then_raises_typed_unavailable_error(self, urlopen, sleep):
+        payload = json.dumps(
+            {
+                "error": {
+                    "code": 503,
+                    "message": "This model is currently experiencing high demand.",
+                    "status": "UNAVAILABLE",
+                }
+            }
+        ).encode("utf-8")
+        urlopen.side_effect = [
+            urllib.error.HTTPError(
+                "https://example.invalid",
+                503,
+                "UNAVAILABLE",
+                {},
+                io.BytesIO(payload),
+            )
+            for _ in range(3)
+        ]
+
+        with self.assertRaises(ProviderUnavailableError) as raised:
+            open_with_retry(
+                urllib.request.Request("https://example.invalid"),
+                timeout=300,
+                provider_name="Gemini",
+                max_attempts=3,
+                retry_delay_seconds=2,
+            )
+
+        self.assertEqual(urlopen.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [2, 4])
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertIn("high demand", str(raised.exception))
 
     @patch("promptcase_studio.providers.base.time.sleep")
     @patch("promptcase_studio.providers.base.urllib.request.urlopen")

@@ -18,6 +18,37 @@ class ProviderError(RuntimeError):
     pass
 
 
+class ProviderUnavailableError(ProviderError):
+    """A structured temporary service or model availability failure."""
+
+    def __init__(
+        self,
+        provider_name: str,
+        *,
+        status_code: int = 503,
+        detail: str = "",
+        retry_after_seconds: float | None = None,
+    ) -> None:
+        self.provider_name = provider_name
+        self.status_code = status_code
+        self.detail = detail
+        self.retry_after_seconds = retry_after_seconds
+        detail_text = f" {detail.strip()}" if detail.strip() else ""
+        super().__init__(
+            f"{provider_name} HTTP {status_code}: 모델 또는 서비스가 일시적으로 "
+            f"사용 불가합니다. 잠시 후 다시 시도해 주세요.{detail_text}"
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "type": "unavailable",
+            "provider": self.provider_name,
+            "statusCode": self.status_code,
+            "retryAfterSeconds": self.retry_after_seconds,
+            "message": str(self),
+        }
+
+
 class ProviderRateLimitError(ProviderError):
     """A structured 429 error that callers can handle without parsing text."""
 
@@ -241,6 +272,14 @@ def open_with_retry(
             if exc.code == 429:
                 error = _rate_limit_error(provider_name, detail[:32768], exc.headers)
                 retryable = not error.daily_quota
+            elif exc.code == 503:
+                error = ProviderUnavailableError(
+                    provider_name,
+                    status_code=exc.code,
+                    detail=detail[:1500],
+                    retry_after_seconds=_retry_after_header_seconds(exc.headers),
+                )
+                retryable = True
             else:
                 error = ProviderError(f"{provider_name} HTTP {exc.code}: {detail[:1500]}")
                 retryable = exc.code in RETRYABLE_HTTP_STATUS
@@ -251,11 +290,7 @@ def open_with_retry(
         if not retryable or attempt >= attempts:
             raise error
         backoff_seconds = delay * (2 ** (attempt - 1))
-        server_wait = (
-            error.retry_after_seconds
-            if isinstance(error, ProviderRateLimitError)
-            else None
-        )
+        server_wait = getattr(error, "retry_after_seconds", None)
         wait_seconds = max(backoff_seconds, server_wait or 0.0)
         wait_seconds = min(wait_seconds, max(1.0, float(timeout)))
         if log:

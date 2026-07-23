@@ -9,6 +9,7 @@ from promptcase_studio.providers.base import (
     GenerationDiagnostics,
     ProviderError,
     ProviderRateLimitError,
+    ProviderUnavailableError,
     TextGenerationProvider,
     log_generation_diagnostics,
     open_with_retry,
@@ -38,9 +39,9 @@ class GeminiProvider(TextGenerationProvider):
         else:
             self.models = (selected_model,)
         self.model = self.models[0] if self.models else DEFAULT_GEMINI_MODEL
-        self.fallback_on_daily_quota = self.auto_model_selection
+        self.auto_fallback_enabled = self.auto_model_selection
         self._active_model_index = 0
-        self._rate_limited_models: set[str] = set()
+        self._failed_models: set[str] = set()
         self.timeout = int(config.get("timeoutSeconds", 300))
         self.max_attempts = int(config.get("maxAttempts", 3))
         self.retry_delay_seconds = float(config.get("retryDelaySeconds", 2))
@@ -103,28 +104,36 @@ class GeminiProvider(TextGenerationProvider):
         self.last_diagnostics = None
         if not self.api_key:
             raise ProviderError("GEMINI_API_KEY가 없습니다. 환경설정 또는 .env를 확인해 주세요.")
-        last_quota_error: ProviderRateLimitError | None = None
+        last_fallback_error: ProviderError | None = None
         for model_index in range(self._active_model_index, len(self.models)):
             model = self.models[model_index]
-            if model in self._rate_limited_models:
+            if model in self._failed_models:
                 continue
             try:
                 result = self._generate_with_model(model, prompt, log, on_chunk)
-            except ProviderRateLimitError as exc:
-                if not self.fallback_on_daily_quota:
+            except (ProviderRateLimitError, ProviderUnavailableError) as exc:
+                if not self.auto_fallback_enabled:
                     raise
-                self._rate_limited_models.add(model)
-                last_quota_error = exc
+                self._failed_models.add(model)
+                last_fallback_error = exc
                 next_model = next(
                     (
                         candidate
                         for candidate in self.models[model_index + 1 :]
-                        if candidate not in self._rate_limited_models
+                        if candidate not in self._failed_models
                     ),
                     None,
                 )
                 if not next_model:
                     break
+                if isinstance(exc, ProviderUnavailableError):
+                    if log:
+                        log(
+                            "FALLBACK",
+                            f"Gemini {model} 서버 과부하 또는 일시 장애, "
+                            f"다음 대체 모델 {next_model}로 전환",
+                        )
+                    continue
                 if log:
                     reason = "일일 한도 소진" if exc.daily_quota else "요청 한도 재시도 소진"
                     log(
@@ -136,11 +145,20 @@ class GeminiProvider(TextGenerationProvider):
             self.model = model
             return result
 
-        if last_quota_error is not None:
+        if last_fallback_error is not None:
+            if isinstance(last_fallback_error, ProviderUnavailableError):
+                if log:
+                    exhausted = ", ".join(self._failed_models)
+                    log(
+                        "WARN",
+                        f"Gemini 자동 대체 모델을 모두 시도했지만 일시 장애가 "
+                        f"계속되었습니다: {exhausted}",
+                    )
+                raise last_fallback_error
             if log:
-                exhausted = ", ".join(self._rate_limited_models)
+                exhausted = ", ".join(self._failed_models)
                 log("QUOTA", f"Gemini 자동 대체 모델의 요청 한도까지 소진됨: {exhausted}")
-            raise last_quota_error
+            raise last_fallback_error
         raise ProviderError("사용 가능한 Gemini 텍스트 출력 모델이 없습니다.")
 
     def _generate_with_model(

@@ -12,7 +12,7 @@ from promptcase_studio.excel_writer import generate_workbook
 from promptcase_studio.models import AnalysisRequest, ChangeItem, ChunkCallback, LogCallback, PipelineResult
 from promptcase_studio.prompt_builder import build_prompt_package
 from promptcase_studio.providers import create_provider
-from promptcase_studio.providers.base import ProviderRateLimitError
+from promptcase_studio.providers.base import ProviderError, ProviderRateLimitError
 from promptcase_studio.quality import build_quality_report, quality_report_markdown
 from promptcase_studio.response_parser import ResponseValidationError, parse_structured_response
 from promptcase_studio.scanner import build_scan_bundle, write_scan_artifacts
@@ -21,6 +21,19 @@ from promptcase_studio.template_catalog import UNIT_TEST_TEMPLATE
 
 class PipelinePausedError(RuntimeError):
     """The current run is safely preserved and can be retried after an external limit clears."""
+
+
+def _provider_interruption(exc: ProviderError) -> dict[str, Any]:
+    serializer = getattr(exc, "to_dict", None)
+    if callable(serializer):
+        payload = serializer()
+        if isinstance(payload, dict):
+            return payload
+    return {
+        "type": "provider_error",
+        "provider": exc.__class__.__name__,
+        "message": str(exc),
+    }
 
 
 def _log(callback: LogCallback | None, level: str, message: str) -> None:
@@ -502,8 +515,17 @@ def run_pipeline(
                         log,
                         on_chunk,
                     )
-                except ProviderRateLimitError as exc:
-                    review_interruption = exc.to_dict()
+                except ProviderError as exc:
+                    review_interruption = _provider_interruption(exc)
+                    if not isinstance(exc, ProviderRateLimitError):
+                        _log(
+                            log,
+                            "WARN",
+                            "AI 품질 검토 중 공급자 오류가 발생했습니다. "
+                            "이미 계약 검증을 통과한 현재 최선의 초안으로 "
+                            f"문서 생성을 계속합니다: {exc}",
+                        )
+                        break
                     _log(
                         log,
                         "QUOTA",
@@ -570,6 +592,17 @@ def run_pipeline(
         strict_quality_gate = quality_gate_mode == "strict"
         quality_status = "review_required" if critical_issues else "pass"
         if critical_issues:
+            if (
+                review_interruption
+                and strict_quality_gate
+                and review_interruption.get("type") != "rate_limit"
+            ):
+                raise PipelinePausedError(
+                    f"초안 생성은 완료되었지만 필수 품질 문제 {critical_issues}건을 "
+                    "교정하는 중 AI 공급자 오류로 품질 검토가 중단되었습니다. "
+                    f"{review_interruption['message']} 초안과 품질 진단은 "
+                    f"{run_directory}에 보존했습니다."
+                )
             if review_interruption and strict_quality_gate:
                 raise PipelinePausedError(
                     f"초안 생성은 완료되었지만 필수 품질 문제 {critical_issues}건을 교정하기 전 "

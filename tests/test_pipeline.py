@@ -9,7 +9,11 @@ from promptcase_studio.config import load_settings
 from promptcase_studio.models import AnalysisRequest, ChangeItem
 from promptcase_studio.pipeline import PipelinePausedError, _document_title, _program_info, run_pipeline
 from promptcase_studio.providers.mock import MockProvider
-from promptcase_studio.providers.base import ProviderError, ProviderRateLimitError
+from promptcase_studio.providers.base import (
+    ProviderError,
+    ProviderRateLimitError,
+    ProviderUnavailableError,
+)
 from promptcase_studio.response_parser import ResponseValidationError
 
 
@@ -498,6 +502,58 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(any(level == "QUOTA" for level, _message in logs))
         self.assertTrue(any(level == "DONE" for level, _message in logs))
         self.assertFalse(any(level in {"ERROR", "PAUSED"} for level, _message in logs))
+
+    def test_best_effort_gate_exports_draft_when_review_hits_503(self):
+        class UnavailableAfterDraftProvider:
+            def __init__(self):
+                self.calls = 0
+
+            def generate(self, prompt, log=None, on_chunk=None):
+                self.calls += 1
+                if self.calls > 1:
+                    raise ProviderUnavailableError(
+                        "Gemini",
+                        status_code=503,
+                        detail="This model is currently experiencing high demand.",
+                    )
+                return MockProvider().generate(prompt, log=log, on_chunk=on_chunk)
+
+        case_directory = TEMP_ROOT / "pipeline-quality-503-best-effort"
+        settings = deepcopy(load_settings())
+        settings["mockMode"] = False
+        settings["qualityReviewEnabled"] = True
+        settings["qualityReviewPasses"] = 1
+        settings["qualityReviewValidationAttempts"] = 1
+        settings["qualityGateMode"] = "best_effort"
+        settings["templatePath"] = str(PROJECT_ROOT / "templates" / "unittest_template.xlsx")
+        settings["runDirectory"] = str(case_directory / "runs")
+        provider = UnavailableAfterDraftProvider()
+        request = AnalysisRequest(
+            project_roots=[FIXTURE_ROOT.resolve()],
+            manual_changes="변경 src/service/UserService.java",
+            request_text="활성 사용자 조회 조건을 변경함",
+            environment="online",
+            include_git=False,
+        )
+        logs = []
+
+        with patch("promptcase_studio.pipeline.create_provider", return_value=provider):
+            result = run_pipeline(
+                request,
+                settings,
+                log=lambda level, message: logs.append((level, message)),
+            )
+
+        quality = json.loads(
+            (result.run_directory / "quality-review.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(provider.calls, 2)
+        self.assertTrue(result.document_path.exists())
+        self.assertEqual(quality["selected"], "draft")
+        self.assertEqual(quality["interruption"]["type"], "unavailable")
+        self.assertTrue(any(level == "WARN" and "현재 최선의 초안" in message for level, message in logs))
+        self.assertTrue(any(level == "DONE" for level, _message in logs))
+        self.assertFalse(any(level == "ERROR" for level, _message in logs))
 
     def test_best_effort_gate_exports_valid_draft_when_review_contract_fails(self):
         class InvalidReviewAfterDraftProvider:
