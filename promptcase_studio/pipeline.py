@@ -15,6 +15,7 @@ from promptcase_studio.providers import create_provider
 from promptcase_studio.quality import build_quality_report, quality_report_markdown
 from promptcase_studio.response_parser import ResponseValidationError, parse_structured_response
 from promptcase_studio.scanner import build_scan_bundle, write_scan_artifacts
+from promptcase_studio.template_catalog import UNIT_TEST_TEMPLATE
 
 
 def _log(callback: LogCallback | None, level: str, message: str) -> None:
@@ -559,7 +560,9 @@ def run_pipeline(
     result_count = len(structured["testResult"]["resultChecks"])
     _log(log, "VALIDATE", f"계약 검증 완료, 테스트 절차 {procedure_count}건, 결과 확인 {result_count}건")
 
-    template_path = resolve_project_path(settings.get("templatePath", "templates/단위테스트 템플릿.xlsx"))
+    template_path = resolve_project_path(
+        settings.get("templatePath", UNIT_TEST_TEMPLATE.relative_path)
+    )
     title = _document_title(structured, request)
     suggested_filename = f"{title}_단위테스트_{started.strftime('%Y%m%d_%H%M%S')}.xlsx"
     document_path = run_directory / "unit-test-preview.xlsx"

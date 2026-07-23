@@ -37,7 +37,7 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertTrue(window.date_to.calendarPopup())
         self.assertEqual(window.date_from_label.text(), "시작일")
         self.assertEqual(window.date_to_label.text(), "종료일")
-        self.assertEqual(window.template_button.text(), "템플릿 내려받기")
+        self.assertEqual(window.template_button.text(), "단위테스트 템플릿 내려받기")
         self.assertEqual(window.header_environment.height(), window.settings_button.height())
         self.assertEqual(window.template_button.height(), window.settings_button.height())
         window.terminal.append_log("SCAN", "테스트 로그")
@@ -82,7 +82,7 @@ class GuiSmokeTests(unittest.TestCase):
 
     def test_test_case_download_uses_save_dialog_destination(self):
         project_root = Path(__file__).resolve().parent.parent
-        source = project_root / "templates" / "단위테스트 템플릿.xlsx"
+        source = project_root / "templates" / "unittest_template.xlsx"
         case_root = project_root / "tmp" / "tests" / "gui-download"
         case_root.mkdir(parents=True, exist_ok=True)
         destination = case_root / "사업계획관리시스템_단위테스트_20260722_180000.xlsx"
@@ -104,6 +104,33 @@ class GuiSmokeTests(unittest.TestCase):
         ):
             window._download_test_case()
         self.assertTrue(destination.exists(), critical.call_args)
+        critical.assert_not_called()
+        window.close()
+
+    def test_template_download_uses_english_source_and_korean_default_name(self):
+        project_root = Path(__file__).resolve().parent.parent
+        source = project_root / "templates" / "unittest_template.xlsx"
+        case_root = project_root / "tmp" / "tests" / "gui-template-download"
+        case_root.mkdir(parents=True, exist_ok=True)
+        destination = case_root / "단위테스트 템플릿.xlsx"
+        if destination.exists():
+            destination.unlink()
+        captured_default = {}
+
+        def choose_destination(_parent, _title, default_path, _filter):
+            captured_default["path"] = Path(default_path)
+            return str(destination), ""
+
+        window = MainWindow()
+        with (
+            patch.object(QFileDialog, "getSaveFileName", side_effect=choose_destination),
+            patch.object(QMessageBox, "information"),
+            patch.object(QMessageBox, "critical") as critical,
+        ):
+            window._download_template()
+
+        self.assertEqual(captured_default["path"].name, "단위테스트 템플릿.xlsx")
+        self.assertEqual(destination.read_bytes(), source.read_bytes())
         critical.assert_not_called()
         window.close()
 
@@ -143,7 +170,7 @@ class GuiSmokeTests(unittest.TestCase):
 
     def test_editing_an_input_invalidates_the_previous_download(self):
         project_root = Path(__file__).resolve().parent.parent
-        source = project_root / "templates" / "단위테스트 템플릿.xlsx"
+        source = project_root / "templates" / "unittest_template.xlsx"
         window = MainWindow()
         window.last_result = PipelineResult(
             run_id="stale-result",
@@ -163,7 +190,7 @@ class GuiSmokeTests(unittest.TestCase):
 
     def test_result_is_discarded_if_inputs_change_during_analysis(self):
         project_root = Path(__file__).resolve().parent.parent
-        source = project_root / "templates" / "단위테스트 템플릿.xlsx"
+        source = project_root / "templates" / "unittest_template.xlsx"
         result = PipelineResult(
             run_id="outdated-analysis",
             run_directory=source.parent,

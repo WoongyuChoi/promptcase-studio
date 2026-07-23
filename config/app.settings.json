@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "defaultEnvironment": "online",
-  "templatePath": "templates/단위테스트 템플릿.xlsx",
+  "templatePath": "templates/unittest_template.xlsx",
   "outputDirectory": "outputs",
   "runDirectory": "runs",
   "mockMode": false,

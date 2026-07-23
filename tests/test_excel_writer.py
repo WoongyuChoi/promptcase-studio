@@ -16,7 +16,7 @@ from promptcase_studio.excel_writer import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-TEMPLATE = PROJECT_ROOT / "templates" / "단위테스트 템플릿.xlsx"
+TEMPLATE = PROJECT_ROOT / "templates" / "unittest_template.xlsx"
 TEMP_ROOT = PROJECT_ROOT / "tmp" / "tests"
 
 

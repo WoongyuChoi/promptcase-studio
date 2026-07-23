@@ -8,12 +8,14 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from promptcase_studio.config import (
+    _migrate_legacy_template_path,
     _replace_from_bundle,
     build_runtime_paths,
     initialize_runtime_environment,
     resolve_project_path,
     resource_path,
 )
+from promptcase_studio.template_catalog import UNIT_TEST_TEMPLATE
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -48,6 +50,14 @@ class RuntimePathsTests(unittest.TestCase):
             self.assertEqual(paths.resource_root, repository.resolve())
             self.assertEqual(paths.data_root, repository.resolve())
             self.assertFalse(paths.frozen)
+
+    def test_legacy_unit_test_template_path_is_migrated(self) -> None:
+        settings = {"templatePath": "templates\\단위테스트 템플릿.xlsx"}
+
+        migrated = _migrate_legacy_template_path(settings)
+
+        self.assertEqual(migrated["templatePath"], UNIT_TEST_TEMPLATE.relative_path)
+        self.assertEqual(UNIT_TEST_TEMPLATE.download_name, "단위테스트 템플릿.xlsx")
 
     def test_bundled_resource_replace_retries_transient_windows_lock(self) -> None:
         with writable_test_directory() as directory:
@@ -100,7 +110,7 @@ class RuntimePathsTests(unittest.TestCase):
                 "config/qwen.settings.json": "{\"model\": {}}",
                 "prompts/system.md": "system prompt",
                 "schemas/test_case_response.schema.json": "{}",
-                "templates/unit-test-template.xlsx": "template",
+                "templates/unittest_template.xlsx": "template",
                 "favicon.ico": "icon",
                 ".env": "GEMINI_API_KEY=must-not-be-copied",
             }

@@ -180,7 +180,7 @@ class PipelineTests(unittest.TestCase):
         case_directory.mkdir(parents=True, exist_ok=True)
         settings = deepcopy(load_settings())
         settings["mockMode"] = True
-        settings["templatePath"] = str(PROJECT_ROOT / "templates" / "단위테스트 템플릿.xlsx")
+        settings["templatePath"] = str(PROJECT_ROOT / "templates" / "unittest_template.xlsx")
         settings["runDirectory"] = str(case_directory / "runs")
         settings["outputDirectory"] = str(case_directory / "outputs")
         request = AnalysisRequest(
@@ -228,7 +228,7 @@ class PipelineTests(unittest.TestCase):
         settings["mockMode"] = False
         settings["qualityReviewEnabled"] = False
         settings["responseValidationAttempts"] = 2
-        settings["templatePath"] = str(PROJECT_ROOT / "templates" / "단위테스트 템플릿.xlsx")
+        settings["templatePath"] = str(PROJECT_ROOT / "templates" / "unittest_template.xlsx")
         settings["runDirectory"] = str(case_directory / "runs")
         provider = InvalidThenValidProvider()
         request = AnalysisRequest(
@@ -269,7 +269,7 @@ class PipelineTests(unittest.TestCase):
         settings["mockMode"] = False
         settings["qualityReviewEnabled"] = False
         settings["responseValidationAttempts"] = 1
-        settings["templatePath"] = str(PROJECT_ROOT / "templates" / "단위테스트 템플릿.xlsx")
+        settings["templatePath"] = str(PROJECT_ROOT / "templates" / "unittest_template.xlsx")
         settings["runDirectory"] = str(case_directory / "runs")
         request = AnalysisRequest(
             project_roots=[FIXTURE_ROOT.resolve()],
@@ -309,7 +309,7 @@ class PipelineTests(unittest.TestCase):
         settings["mockMode"] = False
         settings["qualityReviewEnabled"] = False
         settings["responseValidationAttempts"] = 2
-        settings["templatePath"] = str(PROJECT_ROOT / "templates" / "단위테스트 템플릿.xlsx")
+        settings["templatePath"] = str(PROJECT_ROOT / "templates" / "unittest_template.xlsx")
         settings["runDirectory"] = str(case_directory / "runs")
         provider = MultipleErrorsThenValidProvider()
         request = AnalysisRequest(
@@ -348,7 +348,7 @@ class PipelineTests(unittest.TestCase):
         settings["mockMode"] = False
         settings["qualityReviewEnabled"] = True
         settings["qualityReviewValidationAttempts"] = 1
-        settings["templatePath"] = str(PROJECT_ROOT / "templates" / "단위테스트 템플릿.xlsx")
+        settings["templatePath"] = str(PROJECT_ROOT / "templates" / "unittest_template.xlsx")
         settings["runDirectory"] = str(case_directory / "runs")
         provider = QualityImprovingProvider()
         request = AnalysisRequest(
@@ -407,7 +407,7 @@ class PipelineTests(unittest.TestCase):
         settings["qualityReviewEnabled"] = True
         settings["qualityReviewPasses"] = 2
         settings["qualityReviewValidationAttempts"] = 1
-        settings["templatePath"] = str(PROJECT_ROOT / "templates" / "단위테스트 템플릿.xlsx")
+        settings["templatePath"] = str(PROJECT_ROOT / "templates" / "unittest_template.xlsx")
         settings["runDirectory"] = str(case_directory / "runs")
         provider = ScenarioImprovingProvider()
         request = AnalysisRequest(

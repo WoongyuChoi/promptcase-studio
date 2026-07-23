@@ -33,6 +33,7 @@ from PyQt5.QtWidgets import (
 from promptcase_studio.config import PROJECT_ROOT, load_settings, resolve_project_path
 from promptcase_studio.excel_writer import validate_workbook
 from promptcase_studio.models import AnalysisRequest, PipelineResult
+from promptcase_studio.template_catalog import UNIT_TEST_TEMPLATE
 from promptcase_studio.ui.settings_dialog import SettingsDialog
 from promptcase_studio.ui.styles import TERMINAL_STYLE
 from promptcase_studio.ui.worker import GitDiffWorker, PipelineWorker
@@ -259,7 +260,7 @@ class MainWindow(QMainWindow):
         self.header_environment.setObjectName("environmentBadge")
         self.header_environment.setFixedHeight(32)
         self.header_environment.setAlignment(Qt.AlignCenter)
-        self.template_button = QPushButton("템플릿 내려받기")
+        self.template_button = QPushButton(UNIT_TEST_TEMPLATE.button_label)
         self.template_button.setObjectName("topActionButton")
         self.template_button.setFixedHeight(32)
         self.template_button.clicked.connect(self._download_template)
@@ -655,11 +656,13 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "저장 완료", f"테스트케이스를 저장했습니다.\n\n{destination}")
 
     def _download_template(self) -> None:
-        source = resolve_project_path(self.settings.get("templatePath", "templates/단위테스트 템플릿.xlsx"))
+        source = resolve_project_path(
+            self.settings.get("templatePath", UNIT_TEST_TEMPLATE.relative_path)
+        )
         if not source.exists():
             QMessageBox.critical(self, "템플릿 오류", f"템플릿을 찾을 수 없습니다.\n\n{source}")
             return
-        default_path = self._default_save_directory() / "unit-test-template.xlsx"
+        default_path = self._default_save_directory() / UNIT_TEST_TEMPLATE.download_name
         selected, _ = QFileDialog.getSaveFileName(
             self,
             "템플릿 저장",

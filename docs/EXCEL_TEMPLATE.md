@@ -1,7 +1,10 @@
 # Excel 템플릿 규약
 
-Promptcase Studio는 `templates/단위테스트 템플릿.xlsx`를 새로 그리지 않습니다. 원본 XLSX의
+Promptcase Studio는 내부 파일 `templates/unittest_template.xlsx`를 새로 그리지 않습니다. 원본 XLSX의
 시트, 병합, 너비, 높이, 테두리와 스타일을 그대로 복사하고 내용 셀만 치환합니다.
+
+내부 파일명은 여러 문서 템플릿을 구분하기 위해 영문으로 관리하지만, 사용자가 샘플을 내려받을
+때의 기본 파일명은 `단위테스트 템플릿.xlsx`를 사용합니다.
 
 현재 템플릿처럼 입력 셀이 비어 있어도 기존 좌표 규약으로 동작합니다. 아래 placeholder를 셀에
 넣으면 좌표보다 placeholder 치환을 우선하므로, 향후 행이나 열 배치를 바꿀 때 더 안전합니다.

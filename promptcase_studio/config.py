@@ -12,6 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from promptcase_studio.template_catalog import UNIT_TEST_TEMPLATE
+
 
 APP_NAME = "Promptcase Studio"
 APP_DATA_ENV = "PROMPTCASE_STUDIO_DATA_DIR"
@@ -313,11 +315,18 @@ def _read_json(path: Path) -> dict[str, Any]:
     return value
 
 
+def _migrate_legacy_template_path(settings: dict[str, Any]) -> dict[str, Any]:
+    template_path = str(settings.get("templatePath", "")).replace("\\", "/")
+    if template_path in UNIT_TEST_TEMPLATE.legacy_paths:
+        settings["templatePath"] = UNIT_TEST_TEMPLATE.relative_path
+    return settings
+
+
 def load_settings() -> dict[str, Any]:
     initialize_runtime_environment()
     settings = _read_json(DEFAULT_SETTINGS_PATH)
     settings = _deep_merge(settings, _read_json(LOCAL_SETTINGS_PATH))
-    return settings
+    return _migrate_legacy_template_path(settings)
 
 
 def save_local_settings(settings: dict[str, Any]) -> None:
