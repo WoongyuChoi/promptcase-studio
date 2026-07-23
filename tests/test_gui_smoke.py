@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
 from promptcase_studio.models import ChangeItem, PipelineResult, ScanBundle
 from promptcase_studio.scanner import collect_changes
 from promptcase_studio.ui.main_window import MainWindow, _wrap_alert_text
+from promptcase_studio.ui.release_note_dialog import ReleaseNoteDialog
 from promptcase_studio.ui.settings_dialog import SettingsDialog
 from promptcase_studio.ui.styles import APP_STYLESHEET
 from promptcase_studio.ui.tooltip import HelpTooltipButton
@@ -79,6 +80,8 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertTrue(
             all(button.focusPolicy() == Qt.StrongFocus for button in window.help_buttons)
         )
+        self.assertEqual(window.release_note_button.text(), "릴리즈 노트 뷰")
+        self.assertFalse(window.release_note_button.isEnabled())
         window.help_buttons[0].show_bubble()
         self.app.processEvents()
         bubble = window.help_buttons[0]._bubble
@@ -126,6 +129,35 @@ class GuiSmokeTests(unittest.TestCase):
         window.terminal.clear()
         self.assertIn("터미널 로그를 지웠습니다", window.terminal.output.toPlainText())
         window.close()
+
+    def test_release_note_dialog_is_editable_copyable_and_disposable(self):
+        subject = "[릴리즈 안내] 저장 조건 변경 및 확인 요청"
+        body = (
+            "안녕하세요.\n\n저장 조건을 변경했습니다.\n\n"
+            "변경 사항 유무에 따른 동작을 테스트해 주세요.\n\n감사합니다."
+        )
+        dialog = ReleaseNoteDialog(subject, body)
+
+        self.assertFalse(dialog.windowFlags() & Qt.WindowContextHelpButtonHint)
+        self.assertFalse(dialog.subject_edit.isReadOnly())
+        self.assertFalse(dialog.body_edit.isReadOnly())
+        self.assertFalse(dialog.copy_button.icon().isNull())
+
+        dialog.subject_edit.setText("사용자가 수정한 제목")
+        dialog.body_edit.setPlainText("사용자가 수정한 본문")
+        dialog.copy_button.click()
+
+        self.assertEqual(
+            QApplication.clipboard().text(),
+            "제목: 사용자가 수정한 제목\n\n사용자가 수정한 본문",
+        )
+        self.assertEqual(dialog.copy_status.text(), "메일 문안을 복사했습니다.")
+        dialog.reject()
+
+        reopened = ReleaseNoteDialog(subject, body)
+        self.assertEqual(reopened.subject_edit.text(), subject)
+        self.assertEqual(reopened.body_edit.toPlainText(), body)
+        reopened.close()
 
     def test_project_path_cells_accept_direct_input_and_skip_invalid_paths(self):
         window = MainWindow()
@@ -320,13 +352,17 @@ class GuiSmokeTests(unittest.TestCase):
             suggested_filename="이전결과_단위테스트.xlsx",
             response_path=source,
             scan_bundle=ScanBundle(),
+            release_note_subject="[릴리즈 안내] 이전 결과",
+            release_note_body="안녕하세요.\n\n이전 결과입니다.\n\n감사합니다.",
         )
         window.download_button.setEnabled(True)
+        window.release_note_button.setEnabled(True)
 
         window.request_text.setPlainText("새로운 변경 의뢰 내용을 입력한다")
 
         self.assertIsNone(window.last_result)
         self.assertFalse(window.download_button.isEnabled())
+        self.assertFalse(window.release_note_button.isEnabled())
         window.close()
 
     def test_result_is_discarded_if_inputs_change_during_analysis(self):
@@ -348,6 +384,7 @@ class GuiSmokeTests(unittest.TestCase):
 
         self.assertIsNone(window.last_result)
         self.assertFalse(window.download_button.isEnabled())
+        self.assertFalse(window.release_note_button.isEnabled())
         information.assert_not_called()
         window.close()
 
@@ -365,6 +402,8 @@ class GuiSmokeTests(unittest.TestCase):
             quality_score=53,
             quality_issue_count=5,
             quality_critical_count=4,
+            release_note_subject="[릴리즈 안내] 검토 필요 결과",
+            release_note_body="안녕하세요.\n\n검토가 필요한 변경입니다.\n\n감사합니다.",
         )
         window = MainWindow()
         window._active_request_revision = window._input_revision
@@ -377,6 +416,7 @@ class GuiSmokeTests(unittest.TestCase):
 
         self.assertIs(window.last_result, result)
         self.assertTrue(window.download_button.isEnabled())
+        self.assertTrue(window.release_note_button.isEnabled())
         warning.assert_called_once()
         self.assertIn("필수 검토 항목 4건", warning.call_args.args[2])
         information.assert_not_called()
@@ -397,6 +437,11 @@ class GuiSmokeTests(unittest.TestCase):
         self.app.processEvents()
         self.assertFalse(window.control_scroll.verticalScrollBar().isVisible())
         self.assertEqual(window.control_scroll.parentWidget().width(), 580)
+        self.assertLess(window.release_note_button.x(), window.download_button.x())
+        self.assertEqual(
+            window.release_note_button.height(),
+            window.download_button.height(),
+        )
         self.assertGreaterEqual(window.online_radio.width(), window.online_radio.sizeHint().width())
         radio_gap = (
             window.online_radio.geometry().left()

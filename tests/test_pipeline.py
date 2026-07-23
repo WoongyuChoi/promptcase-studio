@@ -314,6 +314,16 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue((result.run_directory / "evidence.txt").exists())
         self.assertTrue((result.run_directory / "quality-review.json").exists())
         self.assertTrue((result.run_directory / "prompt.quality-review.md").exists())
+        self.assertTrue((result.run_directory / "prompt.release-note.md").exists())
+        self.assertTrue((result.run_directory / "release-note.json").exists())
+        self.assertTrue((result.run_directory / "release-note.txt").exists())
+        self.assertEqual(
+            result.release_note_path,
+            result.run_directory / "release-note.txt",
+        )
+        self.assertTrue(result.release_note_subject)
+        self.assertTrue(result.release_note_body.startswith("안녕하세요"))
+        self.assertTrue(result.release_note_body.endswith("감사합니다."))
         self.assertTrue((result.run_directory / "scope_decision.json").exists())
         self.assertTrue((result.run_directory / "pipeline.log").exists())
         document = json.loads((result.run_directory / "document.json").read_text(encoding="utf-8"))
@@ -353,7 +363,7 @@ class PipelineTests(unittest.TestCase):
         logs = []
         with patch("promptcase_studio.pipeline.create_provider", return_value=provider):
             result = run_pipeline(request, settings, log=lambda level, message: logs.append((level, message)))
-        self.assertEqual(provider.calls, 2)
+        self.assertEqual(provider.calls, 3)
         self.assertTrue((result.run_directory / "response.attempt-1.invalid.txt").exists())
         self.assertTrue(any(level == "RETRY" and "계약 오류" in message for level, message in logs))
 
@@ -435,7 +445,7 @@ class PipelineTests(unittest.TestCase):
         with patch("promptcase_studio.pipeline.create_provider", return_value=provider):
             run_pipeline(request, settings)
 
-        self.assertEqual(len(provider.prompts), 2)
+        self.assertEqual(len(provider.prompts), 3)
         correction_prompt = provider.prompts[1]
         self.assertIn("응답 계약 오류 2건", correction_prompt)
         self.assertIn("documentTitle 값이 입력 근거에서 확인되지 않습니다: 재무관리시스템", correction_prompt)
@@ -483,7 +493,7 @@ class PipelineTests(unittest.TestCase):
             (result.run_directory / "quality-review.json").read_text(encoding="utf-8")
         )
         document = json.loads((result.run_directory / "document.json").read_text(encoding="utf-8"))
-        self.assertEqual(provider.calls, 2)
+        self.assertEqual(provider.calls, 3)
         self.assertEqual(quality["selected"], "review")
         self.assertNotIn("서비스 객체", " ".join(document["testCase"]["preconditions"]))
         self.assertTrue(any(level == "REVIEW" for level, _message in logs))
@@ -709,7 +719,7 @@ class PipelineTests(unittest.TestCase):
         quality = json.loads(
             (result.run_directory / "quality-review.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(provider.calls, 2)
+        self.assertEqual(provider.calls, 3)
         self.assertEqual(result.quality_status, "review_required")
         self.assertGreater(result.quality_critical_count, 0)
         self.assertTrue(result.document_path.exists())
@@ -767,7 +777,7 @@ class PipelineTests(unittest.TestCase):
         quality = json.loads(
             (result.run_directory / "quality-review.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(provider.calls, 3)
+        self.assertEqual(provider.calls, 4)
         self.assertEqual(quality["selected"], "review-2")
         self.assertEqual(quality["selectedReport"]["soft_gate"]["blocking"], False)
         self.assertTrue((result.run_directory / "prompt.quality-review-2.md").exists())

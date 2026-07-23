@@ -4,6 +4,7 @@ import json
 
 from promptcase_studio.models import ChunkCallback, LogCallback
 from promptcase_studio.providers.base import TextGenerationProvider
+from promptcase_studio.release_note import RELEASE_NOTE_MARKER
 
 
 class MockProvider(TextGenerationProvider):
@@ -15,6 +16,28 @@ class MockProvider(TextGenerationProvider):
     ) -> str:
         if log:
             log("MOCK", f"외부 네트워크 없이 {len(prompt):,}자 프롬프트 처리")
+        if RELEASE_NOTE_MARKER in prompt:
+            payload = {
+                "subject": "[릴리즈 안내] 사용자 조회 조건 변경 및 확인 요청",
+                "body": (
+                    "안녕하세요.\n\n"
+                    "이번 릴리즈에서는 사용자 조회 조건을 정리하고 활성 상태와 비활성 상태의 "
+                    "처리 기준을 반영했습니다.\n\n"
+                    "주요 변경 사항\n"
+                    "- 활성 사용자 조회 흐름을 반영했습니다.\n"
+                    "- 비활성 사용자가 조회 결과에서 제외되도록 변경했습니다.\n\n"
+                    "확인 부탁드리는 내용\n"
+                    "- 활성 사용자가 조회 결과에 정상적으로 표시되는지 확인해 주세요.\n"
+                    "- 비활성 사용자가 조회 결과에서 제외되는지 확인해 주세요.\n\n"
+                    "변경된 조회 조건과 기존 기능을 함께 테스트해 주시면 감사하겠습니다.\n"
+                    "추가로 확인이 필요한 내용이 있으면 편하게 말씀해 주세요.\n\n"
+                    "감사합니다."
+                ),
+            }
+            text = json.dumps(payload, ensure_ascii=False, indent=2)
+            if log:
+                log("RESPONSE", f"Mock 릴리즈 노트 응답 {len(text):,}자 생성")
+            return text
         payload = {
             "testCase": {
                 "name": "소스 변경사항 단위테스트",

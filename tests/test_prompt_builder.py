@@ -64,7 +64,7 @@ class PromptBuilderTests(unittest.TestCase):
             scanned_files=4,
         )
         prompt = build_prompt(bundle, "활성 사용자 조회 조건을 변경함")
-        self.assertIn("프롬프트 버전: 3.2.0", prompt)
+        self.assertIn("프롬프트 버전: 3.3.0", prompt)
         self.assertIn("응답 스키마 버전: 2.1.0", prompt)
         self.assertIn("품질 정책 버전: 1.3.0", prompt)
         self.assertIn('"documentTitle"', prompt)

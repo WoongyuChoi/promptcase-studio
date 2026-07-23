@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from math import cos, pi, sin
 
-from PyQt5.QtCore import QPointF, Qt
+from PyQt5.QtCore import QPointF, QRectF, Qt
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 
 
@@ -49,6 +49,12 @@ def _draw_icon(name: str, color: str, size: int) -> QPixmap:
         tray.lineTo(24.5, 25)
         tray.lineTo(24.5, 22)
         painter.drawPath(tray)
+    elif name == "copy":
+        pen = QPen(icon_color, 2.2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRoundedRect(QRectF(10, 7, 15, 18), 2, 2)
+        painter.drawRoundedRect(QRectF(7, 10, 15, 18), 2, 2)
     else:
         painter.end()
         raise ValueError(f"지원하지 않는 아이콘: {name}")

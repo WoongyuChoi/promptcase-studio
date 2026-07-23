@@ -20,6 +20,13 @@ from promptcase_studio.prompt_builder import build_prompt_package
 from promptcase_studio.providers import create_provider
 from promptcase_studio.providers.base import ProviderError, ProviderRateLimitError
 from promptcase_studio.quality import build_quality_report, quality_report_markdown
+from promptcase_studio.release_note import (
+    ReleaseNoteValidationError,
+    build_release_note_prompt,
+    fallback_release_note,
+    parse_release_note_response,
+    render_release_note,
+)
 from promptcase_studio.response_parser import ResponseValidationError, parse_structured_response
 from promptcase_studio.scanner import build_scan_bundle, write_scan_artifacts
 from promptcase_studio.template_catalog import UNIT_TEST_TEMPLATE
@@ -282,6 +289,56 @@ def _generate_validated_response(
             _log(log, "RETRY", f"{phase_label} 응답 계약 오류를 교정해 다시 요청: {exc}")
             attempt_prompt = _correction_prompt(base_prompt, response_text, exc)
     raise ResponseValidationError(f"{phase_label} AI 응답 계약 검증을 완료하지 못했습니다.")
+
+
+def _release_note_correction_prompt(
+    original_prompt: str,
+    previous_response: str,
+    error: Exception,
+) -> str:
+    return (
+        f"{original_prompt}\n\n"
+        "[릴리즈 노트 응답 형식 교정 요청]\n"
+        "이전 응답이 아래 계약 검증을 통과하지 못했습니다. 확인된 변경 근거와 사람다운 메일 문체를 "
+        "유지하면서 오류만 바로잡은 JSON 객체 하나를 다시 작성하세요. 설명이나 코드 블록은 "
+        "출력하지 마세요.\n\n"
+        f"검증 오류\n{error}\n\n"
+        f"이전 응답\n{previous_response}"
+    )
+
+
+def _generate_release_note_response(
+    provider: Any,
+    base_prompt: str,
+    validation_attempts: int,
+    run_directory: Path,
+    log: LogCallback | None,
+) -> dict[str, str]:
+    attempt_prompt = base_prompt
+    for attempt in range(1, validation_attempts + 1):
+        _log(log, "RELEASE", f"릴리즈 노트 AI 응답 생성 {attempt}/{validation_attempts}")
+        response_text = provider.generate(attempt_prompt, log=log, on_chunk=None)
+        (run_directory / "release-note.raw.txt").write_text(
+            response_text,
+            encoding="utf-8",
+        )
+        _log_provider_diagnostics(provider, log)
+        try:
+            return parse_release_note_response(response_text)
+        except ReleaseNoteValidationError as exc:
+            (run_directory / f"release-note.attempt-{attempt}.invalid.txt").write_text(
+                response_text,
+                encoding="utf-8",
+            )
+            if attempt >= validation_attempts:
+                raise
+            _log(log, "RETRY", f"릴리즈 노트 응답 계약 오류를 교정해 다시 요청: {exc}")
+            attempt_prompt = _release_note_correction_prompt(
+                base_prompt,
+                response_text,
+                exc,
+            )
+    raise ReleaseNoteValidationError("릴리즈 노트 응답 계약 검증을 완료하지 못했습니다.")
 
 
 def _quality_review_prompt(
@@ -760,6 +817,62 @@ def run_pipeline(
         _log(log, "ERROR", f"AI 응답 생성 또는 검증 실패: {exc}")
         raise
     title = _document_title(structured, request)
+    release_note_attempts = max(
+        1,
+        min(int(settings.get("releaseNoteValidationAttempts", 2)), 3),
+    )
+    release_note: dict[str, str]
+    try:
+        release_note_prompt = build_release_note_prompt(
+            bundle,
+            request.request_text,
+            structured,
+            maximum=max(
+                50_000,
+                int(prompt_settings.get("releaseNoteMaxPromptChars", 100_000)),
+            ),
+        )
+        (run_directory / "prompt.release-note.md").write_text(
+            release_note_prompt,
+            encoding="utf-8",
+        )
+        if review_interruption:
+            release_note = fallback_release_note(structured, title)
+            _log(
+                log,
+                "WARN",
+                "앞선 AI 품질 검토가 중단되어 추가 호출 없이 최종 테스트 문안을 바탕으로 "
+                "릴리즈 노트 메일을 구성했습니다.",
+            )
+        else:
+            release_note = _generate_release_note_response(
+                provider,
+                release_note_prompt,
+                release_note_attempts,
+                run_directory,
+                log,
+            )
+            _log(log, "RELEASE", "릴리즈 노트 메일 문안 생성 및 계약 검증 완료")
+    except Exception as exc:
+        release_note = fallback_release_note(structured, title)
+        _log(
+            log,
+            "WARN",
+            "릴리즈 노트 AI 생성이 완료되지 않아 최종 테스트 문안을 바탕으로 "
+            f"메일 문안을 구성했습니다: {exc}",
+        )
+
+    release_note_path = run_directory / "release-note.txt"
+    (run_directory / "release-note.json").write_text(
+        json.dumps(release_note, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    release_note_path.write_text(
+        render_release_note(release_note),
+        encoding="utf-8",
+    )
+    _log(log, "ARTIFACT", "릴리즈 노트 원본 JSON과 메일 문안 저장")
+
     document = {
         "programInfo": _program_info(
             bundle.changes,
@@ -802,4 +915,7 @@ def run_pipeline(
         quality_score=int(selected_report.get("score", 0)),
         quality_issue_count=len(selected_report.get("issues", [])),
         quality_critical_count=critical_issues,
+        release_note_path=release_note_path,
+        release_note_subject=release_note["subject"],
+        release_note_body=release_note["body"],
     )

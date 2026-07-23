@@ -74,3 +74,6 @@ class PipelineResult:
     quality_score: int = 100
     quality_issue_count: int = 0
     quality_critical_count: int = 0
+    release_note_path: Path | None = None
+    release_note_subject: str = ""
+    release_note_body: str = ""

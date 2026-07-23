@@ -374,7 +374,7 @@ class ExcelWriterTests(unittest.TestCase):
                         cell_value(result, f"C{capture_row}", shared_values),
                         "캡처 이미지를 여기에 붙여 넣으세요",
                     )
-                    self.assertEqual(row_height(result, capture_row), 150.0)
+                    self.assertEqual(row_height(result, capture_row), 280.0)
                     capture_style = cell_style_id(result, f"C{capture_row}")
                     self.assertEqual(style_fill_color(archive, capture_style), "FFFCE8EF")
                     alignment = style_alignment(archive, capture_style)

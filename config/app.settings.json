@@ -6,6 +6,7 @@
   "runDirectory": "runs",
   "mockMode": false,
   "responseValidationAttempts": 3,
+  "releaseNoteValidationAttempts": 2,
   "qualityReviewEnabled": true,
   "qualityReviewPasses": 2,
   "qualityReviewValidationAttempts": 2,
@@ -53,6 +54,7 @@
   },
   "prompt": {
     "maxPromptChars": 420000,
+    "releaseNoteMaxPromptChars": 100000,
     "maxRequestChars": 24000,
     "maxManifestChars": 48000,
     "maxChangeNotesChars": 16000,

@@ -42,6 +42,7 @@ from promptcase_studio.excel_writer import validate_workbook
 from promptcase_studio.models import AnalysisRequest, PipelineResult
 from promptcase_studio.template_catalog import UNIT_TEST_TEMPLATE
 from promptcase_studio.ui.icons import interface_icon
+from promptcase_studio.ui.release_note_dialog import ReleaseNoteDialog
 from promptcase_studio.ui.settings_dialog import SettingsDialog
 from promptcase_studio.ui.styles import TERMINAL_STYLE
 from promptcase_studio.ui.tooltip import HelpTooltipButton
@@ -71,6 +72,7 @@ LOG_COLORS = {
     "USAGE": "#5EEAD4",
     "QUALITY": "#F0ABFC",
     "REVIEW": "#D8B4FE",
+    "RELEASE": "#C4B5FD",
     "VALIDATE": "#F0ABFC",
     "EXCEL": "#93C5FD",
     "DONE": "#6EE7B7",
@@ -591,6 +593,10 @@ class MainWindow(QMainWindow):
         self.download_button.setObjectName("downloadButton")
         self.download_button.setEnabled(False)
         self.download_button.clicked.connect(self._download_test_case)
+        self.release_note_button = QPushButton("릴리즈 노트 뷰")
+        self.release_note_button.setObjectName("releaseNoteButton")
+        self.release_note_button.setEnabled(False)
+        self.release_note_button.clicked.connect(self._open_release_note)
         self.open_output_button = self.download_button
         layout.addStretch(1)
         scroll.setWidget(container)
@@ -600,9 +606,11 @@ class MainWindow(QMainWindow):
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setSpacing(8)
         self.run_button.setFixedSize(90, 32)
+        self.release_note_button.setFixedSize(126, 32)
         self.download_button.setFixedSize(160, 32)
         actions.addWidget(self.run_button)
         actions.addStretch(1)
+        actions.addWidget(self.release_note_button)
         actions.addWidget(self.download_button)
         panel_layout.addLayout(actions)
         return panel
@@ -787,6 +795,7 @@ class MainWindow(QMainWindow):
         self._input_revision += 1
         self.last_result = None
         self.current_run_succeeded = False
+        self.release_note_button.setEnabled(False)
         self.download_button.setEnabled(False)
 
     def _update_environment_badge(self) -> None:
@@ -950,6 +959,7 @@ class MainWindow(QMainWindow):
         self.control_scroll.setEnabled(False)
         self.settings_button.setEnabled(False)
         self.run_button.setEnabled(False)
+        self.release_note_button.setEnabled(False)
         self.download_button.setEnabled(False)
         self.progress.setRange(0, 100)
         self.progress.setValue(4)
@@ -963,6 +973,7 @@ class MainWindow(QMainWindow):
         if self._active_request_revision != self._input_revision:
             self.current_run_succeeded = False
             self.last_result = None
+            self.release_note_button.setEnabled(False)
             self.download_button.setEnabled(False)
             self.terminal.append_log(
                 "WARN",
@@ -971,6 +982,9 @@ class MainWindow(QMainWindow):
             return
         self.last_result = result
         self.current_run_succeeded = True
+        self.release_note_button.setEnabled(
+            bool(result.release_note_subject and result.release_note_body)
+        )
         self.download_button.setEnabled(True)
         if result.quality_status == "review_required":
             _show_alert(
@@ -980,6 +994,7 @@ class MainWindow(QMainWindow):
                 "다운로드 가능한 최선의 초안을 생성했습니다.\n"
                 f"품질 점수 {result.quality_score}점, 필수 검토 항목 "
                 f"{result.quality_critical_count}건이 남아 있습니다.\n"
+                "릴리즈 노트 뷰에서 공유 메일을 확인할 수 있습니다.\n"
                 "저장 후 실행 폴더의 품질 진단과 문안을 함께 확인해 주세요.",
             )
             return
@@ -988,6 +1003,7 @@ class MainWindow(QMainWindow):
             self,
             "분석 완료",
             "단위테스트 초안을 완성했습니다.\n"
+            "릴리즈 노트 뷰에서 팀 공유용 메일을 확인할 수 있습니다.\n"
             "테스트케이스 다운로드를 선택해 저장할 폴더와 파일명을 지정하세요.",
         )
 
@@ -1010,7 +1026,17 @@ class MainWindow(QMainWindow):
         self.run_button.setEnabled(True)
         self.progress.setRange(0, 100)
         self.progress.setValue(100 if self.current_run_succeeded else 0)
-        self.download_button.setEnabled(self.current_run_succeeded and self.last_result is not None)
+        self.release_note_button.setEnabled(
+            self.current_run_succeeded
+            and self.last_result is not None
+            and bool(
+                self.last_result.release_note_subject
+                and self.last_result.release_note_body
+            )
+        )
+        self.download_button.setEnabled(
+            self.current_run_succeeded and self.last_result is not None
+        )
         if self.current_run_succeeded:
             self.terminal.set_status("ready")
         elif self.terminal.status.text() != "ERROR":
@@ -1040,6 +1066,26 @@ class MainWindow(QMainWindow):
                 "WARN",
                 f"저장 폴더를 자동으로 열지 못했습니다: {directory}",
             )
+
+    def _open_release_note(self) -> None:
+        if (
+            not self.last_result
+            or not self.last_result.release_note_subject
+            or not self.last_result.release_note_body
+        ):
+            _show_alert(
+                QMessageBox.warning,
+                self,
+                "릴리즈 노트 확인",
+                "먼저 변경 분석을 완료해 주세요.",
+            )
+            return
+        dialog = ReleaseNoteDialog(
+            self.last_result.release_note_subject,
+            self.last_result.release_note_body,
+            self,
+        )
+        dialog.exec_()
 
     def _download_test_case(self) -> None:
         if not self.last_result or not self.last_result.document_path.exists():

@@ -171,6 +171,61 @@ QPushButton {
 QPushButton:hover { background: #F6F9FC; border-color: #B8C6D8; }
 QPushButton:pressed { background: #EDF2F7; }
 QPushButton:disabled { background: #EFF2F5; color: #A1AAB6; border-color: #E1E6EC; }
+QPushButton#releaseNoteButton {
+    background: #FFFFFF;
+    border-color: #BFCBDD;
+    color: #33466A;
+    font-size: 12px;
+}
+QPushButton#releaseNoteButton:hover {
+    background: #F3F6FC;
+    border-color: #92A4C1;
+}
+QPushButton#releaseNoteButton:disabled {
+    background: #EFF2F5;
+    color: #A1AAB6;
+    border-color: #E1E6EC;
+}
+QDialog#releaseNoteDialog {
+    background: #EEF2F8;
+}
+QWidget#releaseNoteEditor {
+    background: #FFFFFF;
+    border: 1px solid #D8E2EE;
+    border-radius: 10px;
+}
+QLabel#releaseNoteFieldLabel {
+    color: #344054;
+    font-size: 13px;
+    font-weight: 700;
+}
+QLineEdit#releaseNoteSubject {
+    min-height: 34px;
+    padding: 0 10px;
+    font-size: 13px;
+}
+QTextEdit#releaseNoteBody {
+    padding: 10px 12px;
+    font-family: "Pretendard", "맑은 고딕", "Segoe UI";
+    font-size: 13px;
+    selection-background-color: #D7E4F7;
+    selection-color: #172033;
+}
+QPushButton#releaseNoteCopyButton {
+    background: #23367F;
+    border-color: #23367F;
+    color: #FFFFFF;
+    font-size: 13px;
+    font-weight: 750;
+}
+QPushButton#releaseNoteCopyButton:hover {
+    background: #2D469B;
+    border-color: #2D469B;
+}
+QLabel#releaseNoteCopyStatus {
+    color: #176425;
+    font-size: 12px;
+}
 QDialog#settingsDialog QPushButton {
     min-height: 30px;
     max-height: 32px;
