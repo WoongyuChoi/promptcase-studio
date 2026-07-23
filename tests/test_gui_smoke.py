@@ -5,14 +5,23 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtCore import QDate
-from PyQt5.QtWidgets import QApplication, QFileDialog, QLineEdit, QMessageBox
+from PyQt5.QtCore import QDate, Qt
+from PyQt5.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QTabWidget,
+    QToolButton,
+)
 
 from promptcase_studio.models import ChangeItem, PipelineResult, ScanBundle
 from promptcase_studio.scanner import collect_changes
 from promptcase_studio.ui.main_window import MainWindow
 from promptcase_studio.ui.settings_dialog import SettingsDialog
 from promptcase_studio.ui.styles import APP_STYLESHEET
+from promptcase_studio.ui.tooltip import HelpTooltipButton
 from promptcase_studio.ui.worker import _git_change_input_line
 
 
@@ -26,8 +35,42 @@ class GuiSmokeTests(unittest.TestCase):
     def test_main_window_and_terminal_construct(self):
         window = MainWindow()
         self.assertEqual(window.windowTitle(), "Promptcase Studio")
+        self.assertEqual(window.width(), 1366)
+        self.assertEqual(window.height(), 768)
         self.assertFalse(window.windowIcon().isNull())
-        self.assertTrue(window.online_radio.isChecked())
+        self.assertTrue(window.secure_radio.isChecked())
+        self.assertEqual(window.online_radio.text(), "온라인(Gemini)")
+        self.assertEqual(window.secure_radio.text(), "폐쇄망(Qwen)")
+        self.assertEqual(window.findChild(QLabel, "brandTitle").text(), "PROMPTCASE STUDIO")
+        self.assertIsNone(window.findChild(QLabel, "terminalSub"))
+        self.assertEqual(window.terminal.status.text(), "READY")
+        window.terminal.set_running(True)
+        self.assertEqual(window.terminal.status.text(), "RUNNING")
+        window.terminal.set_running(False)
+        self.assertEqual(window.terminal.status.text(), "READY")
+        self.assertEqual(len(window.help_buttons), 4)
+        self.assertTrue(all(button.toolTip() for button in window.help_buttons))
+        self.assertTrue(all(button.width() == 12 for button in window.help_buttons))
+        self.assertTrue(
+            all(isinstance(button, HelpTooltipButton) for button in window.help_buttons)
+        )
+        self.assertTrue(
+            all(button.focusPolicy() == Qt.StrongFocus for button in window.help_buttons)
+        )
+        window.help_buttons[0].show_bubble()
+        self.app.processEvents()
+        bubble = window.help_buttons[0]._bubble
+        self.assertTrue(bubble.isVisible())
+        self.assertEqual(bubble.card.width(), 240)
+        self.assertEqual(bubble.arrow.geometry().right() + 1, bubble.card.geometry().left())
+        self.assertEqual(bubble.seam.width(), 3)
+        self.assertLessEqual(
+            bubble.seam.geometry().left(), bubble.arrow.geometry().right()
+        )
+        self.assertGreaterEqual(
+            bubble.seam.geometry().right(), bubble.card.geometry().left()
+        )
+        window.help_buttons[0].hide_bubble()
         today = QDate.currentDate()
         self.assertEqual(window.date_from.date(), QDate(today.year(), today.month(), 1))
         self.assertEqual(window.date_to.date(), today)
@@ -37,7 +80,7 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertTrue(window.date_to.calendarPopup())
         self.assertEqual(window.date_from_label.text(), "시작일")
         self.assertEqual(window.date_to_label.text(), "종료일")
-        self.assertEqual(window.template_button.text(), "단위테스트 템플릿 내려받기")
+        self.assertEqual(window.template_button.text(), "템플릿 내려받기")
         self.assertEqual(window.header_environment.height(), window.settings_button.height())
         self.assertEqual(window.template_button.height(), window.settings_button.height())
         window.terminal.append_log("SCAN", "테스트 로그")
@@ -49,6 +92,36 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertIn("응답 표시 한도", window.terminal.output.toPlainText())
         window.terminal.clear()
         self.assertIn("터미널 로그를 지웠습니다", window.terminal.output.toPlainText())
+        window.close()
+
+    def test_project_path_cells_accept_direct_input_and_skip_invalid_paths(self):
+        window = MainWindow()
+        valid = str(Path(__file__).parent.resolve())
+        window.folder_list.addItem(valid)
+        window.folder_list.addItem("Z:/promptcase/path/that/does/not/exist")
+
+        roots = window._selected_roots(report_skipped=True)
+
+        self.assertEqual(roots, [Path(valid)])
+        self.assertIn("검색 대상에서 제외", window.terminal.output.toPlainText())
+        window.close()
+
+    def test_project_path_list_shows_four_full_rows_without_clipping(self):
+        window = MainWindow()
+        for index in range(1, 4):
+            window.folder_list.add_path(f"C:/Project/example-{index}")
+        window.show()
+        self.app.processEvents()
+
+        last_rect = window.folder_list.visualItemRect(
+            window.folder_list.item(window.folder_list.count() - 1)
+        )
+        self.assertEqual(window.folder_list.count(), 4)
+        self.assertEqual(window.folder_list.viewport().height(), 140)
+        self.assertEqual(window.folder_list.verticalScrollBar().maximum(), 0)
+        self.assertLessEqual(
+            last_rect.bottom(), window.folder_list.viewport().rect().bottom()
+        )
         window.close()
 
     def test_invalid_date_range_stops_analysis_with_clear_message(self):
@@ -269,6 +342,43 @@ class GuiSmokeTests(unittest.TestCase):
         window.show()
         self.app.processEvents()
         self.assertFalse(window.control_scroll.verticalScrollBar().isVisible())
+        self.assertEqual(window.control_scroll.parentWidget().width(), 580)
+        self.assertGreaterEqual(window.online_radio.width(), window.online_radio.sizeHint().width())
+        self.assertGreaterEqual(window.date_from.width(), window.date_from.minimumSizeHint().width())
+        self.assertGreaterEqual(window.date_to.width(), window.date_to.minimumSizeHint().width())
+        window.close()
+
+    def test_control_panel_is_usable_at_compact_target_resolution(self):
+        window = MainWindow()
+        window.resize(1024, 576)
+        window.show()
+        self.app.processEvents()
+        self.assertEqual(window.size().width(), 1024)
+        self.assertEqual(window.size().height(), 576)
+        self.assertLessEqual(window.control_scroll.verticalScrollBar().maximum(), 140)
+        self.assertLessEqual(window.control_scroll.verticalScrollBar().maximum(), 120)
+        self.assertFalse(window.control_scroll.horizontalScrollBar().isVisible())
+        self.assertGreaterEqual(window.control_scroll.parentWidget().width(), 500)
+        self.assertLessEqual(window.control_scroll.parentWidget().width(), 620)
+        self.assertEqual(window.progress.parentWidget().objectName(), "progressCluster")
+        self.assertEqual(
+            window.progress.parentWidget().parentWidget().objectName(), "card"
+        )
+        self.assertLess(window.secure_radio.geometry().x(), window.online_radio.geometry().x())
+        self.assertGreater(window.git_checkbox.geometry().y(), window.date_checkbox.geometry().y())
+        self.assertEqual(window.run_button.width(), 110)
+        self.assertEqual(window.download_button.width(), 150)
+        run_bottom = window.run_button.mapTo(
+            window, window.run_button.rect().bottomLeft()
+        ).y()
+        download_bottom = window.download_button.mapTo(
+            window, window.download_button.rect().bottomLeft()
+        ).y()
+        terminal_bottom = window.terminal.mapTo(
+            window, window.terminal.rect().bottomLeft()
+        ).y()
+        self.assertEqual(run_bottom, download_bottom)
+        self.assertEqual(run_bottom, terminal_bottom)
         window.close()
 
     def test_settings_dialog_constructs(self):
@@ -278,6 +388,8 @@ class GuiSmokeTests(unittest.TestCase):
         window.settings["qualityGateMode"] = "best_effort"
         dialog = SettingsDialog(window.settings, window)
         self.assertEqual(dialog.windowTitle(), "Promptcase Studio 환경설정")
+        self.assertEqual(dialog.width(), 800)
+        self.assertEqual(dialog.height(), 580)
         self.assertEqual(dialog.qwen_settings_path.text(), "config/qwen.settings.json")
         self.assertEqual(dialog.gemini_timeout.value(), 300)
         self.assertEqual(dialog.gemini_model.currentData(), "auto")
@@ -297,6 +409,26 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(dialog.quality_review_validation_attempts.value(), 2)
         self.assertEqual(dialog.quality_gate_mode.currentData(), "best_effort")
         self.assertIn("최대 4회", dialog.quality_request_hint.text())
+        increase = dialog.quality_review_passes.findChild(
+            QToolButton, "spinIncreaseButton"
+        )
+        decrease = dialog.quality_review_passes.findChild(
+            QToolButton, "spinDecreaseButton"
+        )
+        self.assertIsNotNone(increase)
+        self.assertIsNotNone(decrease)
+        dialog.show()
+        tabs = dialog.findChild(QTabWidget)
+        tabs.setCurrentIndex(0)
+        self.app.processEvents()
+        self.assertTrue(increase.isVisible())
+        self.assertTrue(decrease.isVisible())
+        self.assertLess(increase.geometry().right(), dialog.quality_review_passes.width())
+        self.assertLess(decrease.geometry().right(), dialog.quality_review_passes.width())
+        increase.click()
+        self.assertEqual(dialog.quality_review_passes.value(), 3)
+        decrease.click()
+        self.assertEqual(dialog.quality_review_passes.value(), 2)
         dialog.close()
         window.close()
 
@@ -358,6 +490,7 @@ class GuiSmokeTests(unittest.TestCase):
 
     def test_native_checkbox_indicator_is_not_replaced_by_solid_fill(self):
         self.assertNotIn("QCheckBox::indicator:checked", APP_STYLESHEET)
+        self.assertNotIn("button-symbols", APP_STYLESHEET)
 
     def test_git_import_keeps_the_origin_root_for_duplicate_relative_paths(self):
         fixture = Path(__file__).parent / "fixtures" / "multi_root"

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import html
+import os
 import shutil
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from PyQt5.QtCore import QDate, QTimer, Qt
+from PyQt5.QtCore import QDate, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QCloseEvent, QFont, QIcon, QTextCursor
 from PyQt5.QtWidgets import (
     QButtonGroup,
@@ -16,7 +17,9 @@ from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QProgressBar,
@@ -25,7 +28,9 @@ from PyQt5.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSplitter,
+    QStyle,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -36,6 +41,7 @@ from promptcase_studio.models import AnalysisRequest, PipelineResult
 from promptcase_studio.template_catalog import UNIT_TEST_TEMPLATE
 from promptcase_studio.ui.settings_dialog import SettingsDialog
 from promptcase_studio.ui.styles import TERMINAL_STYLE
+from promptcase_studio.ui.tooltip import HelpTooltipButton
 from promptcase_studio.ui.worker import GitDiffWorker, PipelineWorker
 
 
@@ -103,25 +109,27 @@ class TerminalPanel(QFrame):
         header_layout.setContentsMargins(14, 8, 10, 8)
         header_layout.setSpacing(8)
 
-        dots = QLabel("CONSOLE")
-        dots.setObjectName("terminalDots")
-        title_box = QVBoxLayout()
-        title_box.setSpacing(0)
-        title = QLabel("PROMPTCASE STUDIO  PIPELINE CONSOLE")
+        traffic_lights = QWidget()
+        traffic_lights.setObjectName("trafficLights")
+        traffic_layout = QHBoxLayout(traffic_lights)
+        traffic_layout.setContentsMargins(0, 0, 0, 0)
+        traffic_layout.setSpacing(6)
+        for object_name in ("trafficRed", "trafficYellow", "trafficGreen"):
+            light = QFrame()
+            light.setObjectName(object_name)
+            light.setFixedSize(10, 10)
+            traffic_layout.addWidget(light)
+        title = QLabel("PIPELINE CONSOLE")
         title.setObjectName("terminalTitle")
-        subtitle = QLabel("SCAN   CONTEXT   PROMPT   RESPONSE   DOCUMENT")
-        subtitle.setObjectName("terminalSub")
-        title_box.addWidget(title)
-        title_box.addWidget(subtitle)
         self.status = QLabel("READY")
         self.status.setObjectName("terminalStatus")
         clear_button = QPushButton("로그 지우기")
         clear_button.setObjectName("terminalButton")
         clear_button.clicked.connect(self.clear)
 
-        header_layout.addWidget(dots)
-        header_layout.addSpacing(10)
-        header_layout.addLayout(title_box)
+        header_layout.addWidget(traffic_lights)
+        header_layout.addSpacing(7)
+        header_layout.addWidget(title)
         header_layout.addStretch(1)
         header_layout.addWidget(self.status)
         header_layout.addWidget(clear_button)
@@ -130,8 +138,8 @@ class TerminalPanel(QFrame):
         self.output.setObjectName("terminalOutput")
         self.output.setReadOnly(True)
         self.output.setAcceptRichText(True)
-        self.output.document().setMaximumBlockCount(3_000)
-        self.output.setFont(QFont("Cascadia Mono", 9))
+        self.output.document().setMaximumBlockCount(1_500)
+        self.output.setFont(QFont("Cascadia Mono", 13))
         self._stream_chars = 0
         self._stream_truncated = False
 
@@ -193,6 +201,101 @@ class TerminalPanel(QFrame):
         self.status.setText("RUNNING" if running else "READY")
 
 
+class PathLineEdit(QLineEdit):
+    focused = pyqtSignal()
+
+    def focusInEvent(self, event) -> None:
+        super().focusInEvent(event)
+        self.focused.emit()
+
+
+class ProjectPathList(QListWidget):
+    pathsChanged = pyqtSignal()
+    ROW_HEIGHT = 35
+    VISIBLE_ROWS = 4
+    FRAME_HEIGHT = 2
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("projectPathList")
+        self.setSelectionMode(QListWidget.ExtendedSelection)
+        self.setFixedHeight(
+            self.ROW_HEIGHT * self.VISIBLE_ROWS + self.FRAME_HEIGHT
+        )
+
+    def addItem(self, item) -> None:
+        if isinstance(item, str):
+            self.add_path(item)
+            return
+        super().addItem(item)
+
+    def add_path(self, value: str = "") -> None:
+        normalized = value.strip().casefold()
+        if normalized and any(path.casefold() == normalized for path in self.paths()):
+            return
+        item = QListWidgetItem()
+        item.setSizeHint(QSize(0, self.ROW_HEIGHT))
+        QListWidget.addItem(self, item)
+
+        row = QWidget()
+        row.setObjectName("pathRow")
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(1, 0, 1, 0)
+        row_layout.setSpacing(4)
+        editor = PathLineEdit(value)
+        editor.setObjectName("pathEditor")
+        editor.setPlaceholderText("프로젝트 또는 소스 폴더 경로 입력")
+        editor.focused.connect(lambda selected=item: self._select_item(selected))
+        editor.textChanged.connect(self.pathsChanged)
+        browse = QPushButton()
+        browse.setObjectName("pathBrowseButton")
+        browse.setIcon(self.style().standardIcon(QStyle.SP_DirOpenIcon))
+        browse.setFixedSize(31, 30)
+        browse.clicked.connect(lambda _checked=False, target=editor, selected=item: self._browse(target, selected))
+        row_layout.addWidget(editor, 1)
+        row_layout.addWidget(browse)
+        self.setItemWidget(item, row)
+        self._select_item(item)
+        editor.setFocus()
+        self.pathsChanged.emit()
+
+    def _select_item(self, item: QListWidgetItem) -> None:
+        self.clearSelection()
+        item.setSelected(True)
+        self.setCurrentItem(item)
+
+    def _browse(self, editor: QLineEdit, item: QListWidgetItem) -> None:
+        self._select_item(item)
+        initial = editor.text().strip()
+        if not Path(os.path.expandvars(initial)).expanduser().is_dir():
+            initial = ""
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "분석할 프로젝트 폴더 선택",
+            initial,
+        )
+        if folder:
+            editor.setText(folder)
+
+    def paths(self) -> list[str]:
+        values: list[str] = []
+        for index in range(self.count()):
+            row = self.itemWidget(self.item(index))
+            editor = row.findChild(QLineEdit) if row else None
+            value = editor.text().strip() if editor else ""
+            if value:
+                values.append(value)
+        return values
+
+    def remove_selected_cells(self) -> None:
+        selected = self.selectedItems()
+        if not selected and self.currentItem() is not None:
+            selected = [self.currentItem()]
+        for item in selected:
+            self.takeItem(self.row(item))
+        self.pathsChanged.emit()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -204,10 +307,11 @@ class MainWindow(QMainWindow):
         self._close_when_finished = False
         self._input_revision = 0
         self._active_request_revision: int | None = None
+        self.help_buttons: list[QToolButton] = []
         self.setWindowTitle("Promptcase Studio")
         self.setWindowIcon(QIcon(str(PROJECT_ROOT / "favicon.ico")))
-        self.resize(1500, 900)
-        self.setMinimumSize(1180, 720)
+        self.resize(1366, 768)
+        self.setMinimumSize(960, 540)
         self._build_ui()
         self._apply_default_environment()
         self._connect_result_invalidation()
@@ -222,29 +326,32 @@ class MainWindow(QMainWindow):
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
-        splitter.addWidget(self._build_control_panel())
+        control_panel = self._build_control_panel()
+        control_panel.setMinimumWidth(500)
+        control_panel.setMaximumWidth(620)
+        splitter.addWidget(control_panel)
         self.terminal = TerminalPanel()
         terminal_wrap = QWidget()
         terminal_layout = QVBoxLayout(terminal_wrap)
-        terminal_layout.setContentsMargins(6, 14, 16, 16)
+        terminal_layout.setContentsMargins(6, 10, 12, 12)
         terminal_layout.addWidget(self.terminal)
         splitter.addWidget(terminal_wrap)
-        splitter.setSizes([610, 890])
-        splitter.setStretchFactor(0, 4)
-        splitter.setStretchFactor(1, 6)
+        splitter.setSizes([580, 786])
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
         root_layout.addWidget(splitter, 1)
         self.setCentralWidget(root)
 
     def _build_top_bar(self) -> QFrame:
         frame = QFrame()
         frame.setObjectName("topBar")
-        frame.setFixedHeight(60)
+        frame.setFixedHeight(52)
         layout = QHBoxLayout(frame)
-        layout.setContentsMargins(18, 8, 16, 8)
+        layout.setContentsMargins(16, 7, 14, 7)
         layout.setSpacing(8)
         mark = QLabel()
         mark.setObjectName("brandMark")
-        mark.setFixedSize(38, 38)
+        mark.setFixedSize(36, 36)
         mark.setAlignment(Qt.AlignCenter)
         icon_pixmap = QIcon(str(PROJECT_ROOT / "favicon.ico")).pixmap(24, 24)
         if icon_pixmap.isNull():
@@ -253,26 +360,26 @@ class MainWindow(QMainWindow):
             mark.setPixmap(icon_pixmap)
         title_box = QVBoxLayout()
         title_box.setSpacing(0)
-        title = QLabel("Promptcase Studio")
+        title = QLabel("PROMPTCASE STUDIO")
         title.setObjectName("brandTitle")
-        subtitle = QLabel("SOURCE CHANGE TO UNIT TEST DOCUMENT")
+        subtitle = QLabel("코드 변경 분석 기반 단위테스트 문서 생성")
         subtitle.setObjectName("brandSub")
         title_box.addWidget(title)
         title_box.addWidget(subtitle)
         self.header_environment = QLabel()
         self.header_environment.setObjectName("environmentBadge")
-        self.header_environment.setFixedHeight(32)
+        self.header_environment.setFixedHeight(30)
         self.header_environment.setAlignment(Qt.AlignCenter)
         self.template_button = QPushButton(UNIT_TEST_TEMPLATE.button_label)
         self.template_button.setObjectName("topActionButton")
-        self.template_button.setFixedHeight(32)
+        self.template_button.setFixedHeight(30)
         self.template_button.clicked.connect(self._download_template)
         self.settings_button = QPushButton("환경설정")
         self.settings_button.setObjectName("topActionButton")
-        self.settings_button.setFixedHeight(32)
+        self.settings_button.setFixedHeight(30)
         self.settings_button.clicked.connect(self._open_settings)
         layout.addWidget(mark)
-        layout.addSpacing(10)
+        layout.addSpacing(7)
         layout.addLayout(title_box)
         layout.addStretch(1)
         layout.addWidget(self.header_environment)
@@ -281,101 +388,147 @@ class MainWindow(QMainWindow):
         return frame
 
     def _build_control_panel(self) -> QWidget:
+        panel = QWidget()
+        panel.setObjectName("controlPanel")
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(10, 10, 4, 12)
+        panel_layout.setSpacing(8)
+
         scroll = QScrollArea()
+        scroll.setObjectName("controlCardScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.control_scroll = scroll
         container = QWidget()
-        container.setObjectName("controlPanel")
+        container.setObjectName("controlCardContainer")
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(14, 9, 6, 9)
-        layout.setSpacing(6)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(7)
 
         layout.addWidget(self._build_environment_card())
         layout.addWidget(self._build_project_card())
         layout.addWidget(self._build_change_card())
         layout.addWidget(self._build_request_card())
 
-        self.run_button = QPushButton("변경 분석 시작")
+        self.run_button = QPushButton("분석 시작")
         self.run_button.setObjectName("primaryButton")
         self.run_button.clicked.connect(self._start_pipeline)
-        self.progress = QProgressBar()
-        self.progress.setTextVisible(False)
-        self.progress.setRange(0, 1)
-        self.progress.setValue(0)
         self.download_button = QPushButton("테스트케이스 다운로드")
+        self.download_button.setObjectName("downloadButton")
         self.download_button.setEnabled(False)
         self.download_button.clicked.connect(self._download_test_case)
         self.open_output_button = self.download_button
-        actions = QHBoxLayout()
-        actions.setSpacing(8)
-        actions.addWidget(self.run_button, 1)
-        actions.addWidget(self.download_button)
-        layout.addLayout(actions)
-        layout.addWidget(self.progress)
         layout.addStretch(1)
         scroll.setWidget(container)
-        return scroll
+        panel_layout.addWidget(scroll, 1)
 
-    def _card(self, title: str, hint: str) -> tuple[QFrame, QVBoxLayout]:
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(8)
+        self.run_button.setFixedSize(110, 32)
+        self.download_button.setFixedSize(150, 32)
+        actions.addWidget(self.run_button)
+        actions.addStretch(1)
+        actions.addWidget(self.download_button)
+        panel_layout.addLayout(actions)
+        return panel
+
+    def _card(
+        self,
+        title: str,
+        help_text: str,
+        actions: list[QWidget] | None = None,
+    ) -> tuple[QFrame, QVBoxLayout]:
         card = QFrame()
         card.setObjectName("card")
         card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(14, 8, 14, 8)
-        layout.setSpacing(4)
+        layout.setContentsMargins(12, 8, 12, 9)
+        layout.setSpacing(5)
         title_label = QLabel(title)
         title_label.setObjectName("sectionTitle")
-        hint_label = QLabel(hint)
-        hint_label.setObjectName("sectionHint")
-        hint_label.setWordWrap(True)
-        layout.addWidget(title_label)
-        layout.addWidget(hint_label)
+        tooltip_title = title.split(". ", 1)[-1]
+        help_badge = HelpTooltipButton(tooltip_title, help_text)
+        self.help_buttons.append(help_badge)
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(6)
+        header.addWidget(title_label)
+        header.addWidget(help_badge)
+        header.addStretch(1)
+        for action in actions or []:
+            header.addWidget(action)
+        layout.addLayout(header)
         return card, layout
 
     def _build_environment_card(self) -> QFrame:
-        card, layout = self._card("01  AI 연결 환경", "온라인은 Gemini API, 중요단말망은 Qwen 설정을 사용합니다.")
-        self.online_radio = QRadioButton("온라인 Gemini")
-        self.secure_radio = QRadioButton("중요단말망 Qwen")
+        progress_cluster = QWidget()
+        progress_cluster.setObjectName("progressCluster")
+        progress_layout = QHBoxLayout(progress_cluster)
+        progress_layout.setContentsMargins(0, 0, 0, 0)
+        progress_layout.setSpacing(8)
+        self.progress_label = QLabel("진행")
+        self.progress_label.setObjectName("progressLabel")
+        self.progress = QProgressBar()
+        self.progress.setObjectName("miniProgress")
+        self.progress.setTextVisible(False)
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self.progress.setFixedSize(100, 8)
+        progress_layout.addWidget(self.progress_label)
+        progress_layout.addWidget(self.progress)
+
+        card, layout = self._card(
+            "1. API 연결 설정",
+            "폐쇄망은 Qwen 설정을 사용합니다\n온라인은 Gemini API를 사용합니다",
+            [progress_cluster],
+        )
+        self.secure_radio = QRadioButton("폐쇄망(Qwen)")
+        self.online_radio = QRadioButton("온라인(Gemini)")
+        self.secure_radio.setFixedWidth(135)
+        self.online_radio.setFixedWidth(160)
         group = QButtonGroup(self)
-        group.addButton(self.online_radio)
         group.addButton(self.secure_radio)
+        group.addButton(self.online_radio)
         self.online_radio.toggled.connect(self._update_environment_badge)
         row = QHBoxLayout()
-        row.addWidget(self.online_radio)
-        row.addSpacing(12)
         row.addWidget(self.secure_radio)
+        row.addSpacing(12)
+        row.addWidget(self.online_radio)
         row.addStretch(1)
         layout.addLayout(row)
         return card
 
     def _build_project_card(self) -> QFrame:
-        card, layout = self._card("02  분석 대상", "프로젝트 루트 또는 분석이 필요한 핵심 폴더를 추가하세요.")
-        self.folder_list = QListWidget()
-        self.folder_list.setFixedHeight(52)
-        self.folder_list.setToolTip("분석할 프로젝트 또는 핵심 소스 폴더 목록")
-        add_button = QPushButton("프로젝트 추가")
-        add_button.setObjectName("greenButton")
-        remove_button = QPushButton("선택 제거")
-        add_button.clicked.connect(self._add_folder)
+        add_button = QPushButton("셀 추가")
+        add_button.setObjectName("compactActionButton")
+        add_button.setFixedWidth(60)
+        remove_button = QPushButton("셀 삭제")
+        remove_button.setObjectName("compactActionButton")
+        remove_button.setFixedWidth(60)
+        add_button.clicked.connect(self._add_path_cell)
         remove_button.clicked.connect(self._remove_folder)
-        row = QHBoxLayout()
-        row.addWidget(add_button)
-        row.addWidget(remove_button)
-        row.addStretch(1)
+        card, layout = self._card(
+            "2. 분석 대상",
+            "프로젝트 또는 소스 폴더를 입력합니다\n없는 경로는 실행할 때 자동으로 제외합니다",
+            [add_button, remove_button],
+        )
+        self.folder_list = ProjectPathList()
         layout.addWidget(self.folder_list)
-        layout.addLayout(row)
+        self.folder_list.add_path()
         return card
 
     def _build_change_card(self) -> QFrame:
-        card, layout = self._card("03  변경 범위", "Git 이력, 수정일 범위, 수동 목록을 조합해 분석할 파일을 확정합니다.")
+        card, layout = self._card(
+            "3. 변경 범위",
+            "날짜와 Git 이력으로 변경 파일을 찾습니다\n직접 입력한 파일 목록도 함께 분석합니다",
+        )
         date_row = QHBoxLayout()
-        date_row.setSpacing(7)
+        date_row.setSpacing(9)
         self.date_checkbox = QCheckBox("날짜 범위")
         self.date_checkbox.setChecked(True)
-        self.date_checkbox.setToolTip("Git 이력과 파일 수정일에 같은 시작일과 종료일을 적용합니다.")
         today = QDate.currentDate()
         self.date_from_label = QLabel("시작일")
         self.date_from_label.setObjectName("dateRangeLabel")
@@ -385,7 +538,6 @@ class MainWindow(QMainWindow):
         self.date_from.setDisplayFormat("yyyy-MM-dd")
         self.date_from.setMaximumDate(today)
         self.date_from.setDate(QDate(today.year(), today.month(), 1))
-        self.date_from.setToolTip("변경 범위에 포함할 시작일")
         self.date_to_label = QLabel("종료일")
         self.date_to_label.setObjectName("dateRangeLabel")
         self.date_to = QDateEdit()
@@ -394,7 +546,6 @@ class MainWindow(QMainWindow):
         self.date_to.setDisplayFormat("yyyy-MM-dd")
         self.date_to.setMaximumDate(today)
         self.date_to.setDate(today)
-        self.date_to.setToolTip("변경 범위에 포함할 종료일")
         self.git_checkbox = QCheckBox("Git 변경 포함")
         self.git_checkbox.setChecked(True)
         self.date_checkbox.toggled.connect(self.date_from_label.setEnabled)
@@ -406,10 +557,9 @@ class MainWindow(QMainWindow):
         date_row.addWidget(self.date_from)
         date_row.addWidget(self.date_to_label)
         date_row.addWidget(self.date_to)
-        date_row.addWidget(self.git_checkbox)
         date_row.addStretch(1)
         self.manual_changes = QTextEdit()
-        self.manual_changes.setFixedHeight(80)
+        self.manual_changes.setFixedHeight(86)
         self.manual_changes.setPlaceholderText(
             "변경 파일을 한 줄에 하나씩 입력하세요.\n"
             "예: M src/api/UserApi.java\nD src/api/LegacyApi.java\n"
@@ -420,16 +570,20 @@ class MainWindow(QMainWindow):
         clear_button = QPushButton("목록 비우기")
         clear_button.clicked.connect(self.manual_changes.clear)
         button_row = QHBoxLayout()
+        button_row.addWidget(self.git_checkbox)
+        button_row.addStretch(1)
         button_row.addWidget(self.diff_button)
         button_row.addWidget(clear_button)
-        button_row.addStretch(1)
         layout.addLayout(date_row)
         layout.addWidget(self.manual_changes)
         layout.addLayout(button_row)
         return card
 
     def _build_request_card(self) -> QFrame:
-        card, layout = self._card("04  변경 내용 및 의뢰서", "구현 의도, 업무 규칙, 확인이 필요한 시나리오를 자연어로 작성하세요.")
+        card, layout = self._card(
+            "4. 변경 내용 및 의뢰서",
+            "구현 의도와 업무 규칙을 작성합니다\n반드시 확인할 시나리오를 함께 입력합니다",
+        )
         self.request_text = QTextEdit()
         self.request_text.setFixedHeight(90)
         self.request_text.setPlaceholderText(
@@ -441,7 +595,7 @@ class MainWindow(QMainWindow):
         return card
 
     def _apply_default_environment(self) -> None:
-        default = self.settings.get("defaultEnvironment", "online")
+        default = self.settings.get("defaultEnvironment", "secure")
         self.online_radio.setChecked(default != "secure")
         self.secure_radio.setChecked(default == "secure")
         self._update_environment_badge()
@@ -454,8 +608,7 @@ class MainWindow(QMainWindow):
         self.git_checkbox.toggled.connect(self._invalidate_result)
         self.manual_changes.textChanged.connect(self._invalidate_result)
         self.request_text.textChanged.connect(self._invalidate_result)
-        self.folder_list.model().rowsInserted.connect(self._invalidate_result)
-        self.folder_list.model().rowsRemoved.connect(self._invalidate_result)
+        self.folder_list.pathsChanged.connect(self._invalidate_result)
 
     def _invalidate_result(self, *_args) -> None:
         self._input_revision += 1
@@ -464,22 +617,39 @@ class MainWindow(QMainWindow):
         self.download_button.setEnabled(False)
 
     def _update_environment_badge(self) -> None:
-        environment = "온라인 Gemini" if self.online_radio.isChecked() else "중요단말망 Qwen"
+        environment = "온라인(Gemini)" if self.online_radio.isChecked() else "폐쇄망(Qwen)"
         if self.settings.get("mockMode"):
-            environment += " (MOCK)"
+            environment += " Mock"
         self.header_environment.setText(environment)
 
+    def _add_path_cell(self) -> None:
+        self.folder_list.add_path()
+
     def _add_folder(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "분석할 프로젝트 폴더 선택")
-        if folder and not self.folder_list.findItems(folder, Qt.MatchExactly):
-            self.folder_list.addItem(folder)
+        self._add_path_cell()
 
     def _remove_folder(self) -> None:
-        for item in self.folder_list.selectedItems():
-            self.folder_list.takeItem(self.folder_list.row(item))
+        self.folder_list.remove_selected_cells()
 
-    def _selected_roots(self) -> list[Path]:
-        return [Path(self.folder_list.item(index).text()).resolve() for index in range(self.folder_list.count())]
+    def _selected_roots(self, *, report_skipped: bool = False) -> list[Path]:
+        roots: list[Path] = []
+        invalid: list[str] = []
+        for value in self.folder_list.paths():
+            candidate = Path(os.path.expandvars(value)).expanduser()
+            if not candidate.is_dir():
+                invalid.append(value)
+                continue
+            resolved = candidate.resolve()
+            if resolved not in roots:
+                roots.append(resolved)
+        if report_skipped and invalid:
+            preview = ", ".join(invalid[:2])
+            suffix = f" 외 {len(invalid) - 2}개" if len(invalid) > 2 else ""
+            self.terminal.append_log(
+                "WARN",
+                f"존재하지 않는 분석 경로 {len(invalid)}개를 검색 대상에서 제외: {preview}{suffix}",
+            )
+        return roots
 
     def _selected_date_range(self) -> tuple[date | None, date | None]:
         if not self.date_checkbox.isChecked():
@@ -508,9 +678,9 @@ class MainWindow(QMainWindow):
             return
         if self.git_worker is not None and self.git_worker.isRunning():
             return
-        roots = self._selected_roots()
+        roots = self._selected_roots(report_skipped=True)
         if not roots:
-            QMessageBox.information(self, "Git Diff", "먼저 프로젝트 폴더를 추가해 주세요.")
+            QMessageBox.information(self, "Git 변경", "유효한 분석 대상 경로를 먼저 입력해 주세요.")
             return
         if not self._validate_date_range():
             return
@@ -549,10 +719,10 @@ class MainWindow(QMainWindow):
         if self.git_worker is not None and self.git_worker.isRunning():
             QMessageBox.information(self, "Git 변경 조회", "Git 변경 조회가 끝난 뒤 분석을 시작해 주세요.")
             return
-        roots = self._selected_roots()
+        roots = self._selected_roots(report_skipped=True)
         request_text = self.request_text.toPlainText().strip()
         if not roots:
-            QMessageBox.warning(self, "입력 확인", "분석할 프로젝트 폴더를 한 개 이상 추가해 주세요.")
+            QMessageBox.warning(self, "입력 확인", "유효한 분석 대상 폴더를 한 개 이상 입력해 주세요.")
             return
         if not request_text:
             QMessageBox.warning(self, "입력 확인", "변경 로직 또는 의뢰서 내용을 입력해 주세요.")
@@ -669,14 +839,14 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "저장 실패", str(exc))
             return
         self.terminal.append_log("DONE", f"테스트케이스 저장 완료: {destination}")
-        QMessageBox.information(self, "저장 완료", f"테스트케이스를 저장했습니다.\n\n{destination}")
+        QMessageBox.information(self, "저장 완료", f"테스트케이스를 저장했습니다.\n{destination}")
 
     def _download_template(self) -> None:
         source = resolve_project_path(
             self.settings.get("templatePath", UNIT_TEST_TEMPLATE.relative_path)
         )
         if not source.exists():
-            QMessageBox.critical(self, "템플릿 오류", f"템플릿을 찾을 수 없습니다.\n\n{source}")
+            QMessageBox.critical(self, "템플릿 오류", f"템플릿을 찾을 수 없습니다.\n{source}")
             return
         default_path = self._default_save_directory() / UNIT_TEST_TEMPLATE.download_name
         selected, _ = QFileDialog.getSaveFileName(
@@ -697,7 +867,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "저장 실패", str(exc))
             return
         self.terminal.append_log("DONE", f"템플릿 저장 완료: {destination}")
-        QMessageBox.information(self, "저장 완료", f"템플릿을 저장했습니다.\n\n{destination}")
+        QMessageBox.information(self, "저장 완료", f"템플릿을 저장했습니다.\n{destination}")
 
     def _open_settings(self) -> None:
         dialog = SettingsDialog(self.settings, self)

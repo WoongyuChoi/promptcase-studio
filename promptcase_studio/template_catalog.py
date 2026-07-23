@@ -16,6 +16,6 @@ UNIT_TEST_TEMPLATE = DocumentTemplate(
     template_id="unit_test",
     relative_path="templates/unittest_template.xlsx",
     download_name="단위테스트 템플릿.xlsx",
-    button_label="단위테스트 템플릿 내려받기",
+    button_label="템플릿 내려받기",
     legacy_paths=("templates/단위테스트 템플릿.xlsx",),
 )

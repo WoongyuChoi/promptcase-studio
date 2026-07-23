@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "defaultEnvironment": "online",
+  "defaultEnvironment": "secure",
   "templatePath": "templates/unittest_template.xlsx",
   "outputDirectory": "outputs",
   "runDirectory": "runs",

@@ -295,7 +295,7 @@ class ResponseParserTests(unittest.TestCase):
             "사용자관리시스템(신규)",
             "사용자관리시스템 20260722",
             "사용자관리시스템 174617",
-            "사용자관리시스템 단위 테스트",
+            "사용자관리시스템 단위테스트",
         ):
             with self.subTest(title=title):
                 payload = valid_payload()
