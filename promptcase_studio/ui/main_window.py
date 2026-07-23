@@ -7,7 +7,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from PyQt5.QtCore import QDate, QSize, QTimer, Qt, pyqtSignal
+from PyQt5.QtCore import QDate, QDir, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QCloseEvent, QFont, QIcon, QTextCursor
 from PyQt5.QtWidgets import (
     QButtonGroup,
@@ -123,6 +123,7 @@ class TerminalPanel(QFrame):
         title.setObjectName("terminalTitle")
         self.status = QLabel("READY")
         self.status.setObjectName("terminalStatus")
+        self.status.setProperty("state", "ready")
         clear_button = QPushButton("로그 지우기")
         clear_button.setObjectName("terminalButton")
         clear_button.clicked.connect(self.clear)
@@ -198,7 +199,22 @@ class TerminalPanel(QFrame):
         self.append_log("INFO", "터미널 로그를 지웠습니다")
 
     def set_running(self, running: bool) -> None:
-        self.status.setText("RUNNING" if running else "READY")
+        self.set_status("running" if running else "ready")
+
+    def set_status(self, state: str) -> None:
+        normalized = state.strip().lower()
+        labels = {
+            "ready": "READY",
+            "running": "RUNNING",
+            "error": "ERROR",
+        }
+        if normalized not in labels:
+            normalized = "ready"
+        self.status.setText(labels[normalized])
+        self.status.setProperty("state", normalized)
+        self.status.style().unpolish(self.status)
+        self.status.style().polish(self.status)
+        self.status.update()
 
 
 class PathLineEdit(QLineEdit):
@@ -230,7 +246,8 @@ class ProjectPathList(QListWidget):
         super().addItem(item)
 
     def add_path(self, value: str = "") -> None:
-        normalized = value.strip().casefold()
+        display_value = QDir.toNativeSeparators(value.strip())
+        normalized = display_value.casefold()
         if normalized and any(path.casefold() == normalized for path in self.paths()):
             return
         item = QListWidgetItem()
@@ -242,11 +259,14 @@ class ProjectPathList(QListWidget):
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(1, 0, 1, 0)
         row_layout.setSpacing(4)
-        editor = PathLineEdit(value)
+        editor = PathLineEdit(display_value)
         editor.setObjectName("pathEditor")
         editor.setPlaceholderText("프로젝트 또는 소스 폴더 경로 입력")
         editor.focused.connect(lambda selected=item: self._select_item(selected))
         editor.textChanged.connect(self.pathsChanged)
+        editor.editingFinished.connect(
+            lambda target=editor: self._normalize_path_editor(target)
+        )
         browse = QPushButton()
         browse.setObjectName("pathBrowseButton")
         browse.setIcon(self.style().standardIcon(QStyle.SP_DirOpenIcon))
@@ -275,14 +295,19 @@ class ProjectPathList(QListWidget):
             initial,
         )
         if folder:
-            editor.setText(folder)
+            editor.setText(QDir.toNativeSeparators(folder))
+
+    def _normalize_path_editor(self, editor: QLineEdit) -> None:
+        normalized = QDir.toNativeSeparators(editor.text().strip())
+        if normalized != editor.text():
+            editor.setText(normalized)
 
     def paths(self) -> list[str]:
         values: list[str] = []
         for index in range(self.count()):
             row = self.itemWidget(self.item(index))
             editor = row.findChild(QLineEdit) if row else None
-            value = editor.text().strip() if editor else ""
+            value = QDir.toNativeSeparators(editor.text().strip()) if editor else ""
             if value:
                 values.append(value)
         return values
@@ -297,6 +322,9 @@ class ProjectPathList(QListWidget):
 
 
 class MainWindow(QMainWindow):
+    PROGRESS_TICK_MS = 200
+    PROGRESS_ACTIVE_LIMIT = 92
+
     def __init__(self):
         super().__init__()
         self.settings: dict[str, Any] = load_settings()
@@ -313,6 +341,9 @@ class MainWindow(QMainWindow):
         self.resize(1366, 768)
         self.setMinimumSize(960, 540)
         self._build_ui()
+        self._progress_timer = QTimer(self)
+        self._progress_timer.setInterval(self.PROGRESS_TICK_MS)
+        self._progress_timer.timeout.connect(self._advance_progress)
         self._apply_default_environment()
         self._connect_result_invalidation()
 
@@ -427,8 +458,8 @@ class MainWindow(QMainWindow):
         actions = QHBoxLayout()
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setSpacing(8)
-        self.run_button.setFixedSize(110, 32)
-        self.download_button.setFixedSize(150, 32)
+        self.run_button.setFixedSize(90, 32)
+        self.download_button.setFixedSize(160, 32)
         actions.addWidget(self.run_button)
         actions.addStretch(1)
         actions.addWidget(self.download_button)
@@ -504,10 +535,10 @@ class MainWindow(QMainWindow):
     def _build_project_card(self) -> QFrame:
         add_button = QPushButton("셀 추가")
         add_button.setObjectName("compactActionButton")
-        add_button.setFixedWidth(60)
+        add_button.setFixedWidth(70)
         remove_button = QPushButton("셀 삭제")
         remove_button.setObjectName("compactActionButton")
-        remove_button.setFixedWidth(60)
+        remove_button.setFixedWidth(70)
         add_button.clicked.connect(self._add_path_cell)
         remove_button.clicked.connect(self._remove_folder)
         card, layout = self._card(
@@ -553,13 +584,13 @@ class MainWindow(QMainWindow):
         self.date_checkbox.toggled.connect(self.date_to_label.setEnabled)
         self.date_checkbox.toggled.connect(self.date_to.setEnabled)
         date_row.addWidget(self.date_checkbox)
+        date_row.addStretch(1)
         date_row.addWidget(self.date_from_label)
         date_row.addWidget(self.date_from)
         date_row.addWidget(self.date_to_label)
         date_row.addWidget(self.date_to)
-        date_row.addStretch(1)
         self.manual_changes = QTextEdit()
-        self.manual_changes.setFixedHeight(86)
+        self.manual_changes.setFixedHeight(126)
         self.manual_changes.setPlaceholderText(
             "변경 파일을 한 줄에 하나씩 입력하세요.\n"
             "예: M src/api/UserApi.java\nD src/api/LegacyApi.java\n"
@@ -585,10 +616,9 @@ class MainWindow(QMainWindow):
             "구현 의도와 업무 규칙을 작성합니다\n반드시 확인할 시나리오를 함께 입력합니다",
         )
         self.request_text = QTextEdit()
-        self.request_text.setFixedHeight(90)
+        self.request_text.setFixedHeight(100)
         self.request_text.setPlaceholderText(
-            "예\n"
-            "사용자 조회 API를 삭제하고 연관된 메뉴 진입 경로를 정리했습니다.\n"
+            "예) 사용자 조회 API를 삭제하고 연관된 메뉴 진입 경로를 정리했습니다.\n"
             "계약유지서비스 조회 기준과 VISS_D1300 툴팁 계산식을 변경했습니다."
         )
         layout.addWidget(self.request_text)
@@ -752,7 +782,9 @@ class MainWindow(QMainWindow):
         self.settings_button.setEnabled(False)
         self.run_button.setEnabled(False)
         self.download_button.setEnabled(False)
-        self.progress.setRange(0, 0)
+        self.progress.setRange(0, 100)
+        self.progress.setValue(4)
+        self._progress_timer.start()
         self.terminal.set_running(True)
         self.terminal.reset_stream()
         self.terminal.append_log("START", "사용자 요청을 작업 큐에 등록")
@@ -789,24 +821,34 @@ class MainWindow(QMainWindow):
         )
 
     def _pipeline_failed(self, message: str) -> None:
+        self.terminal.set_status("error")
         if "일일 요청 한도" in message or "AI 사용량 한도" in message:
             QMessageBox.warning(self, "AI 사용량 한도 도달", message)
             return
         QMessageBox.critical(self, "작업 실패", message)
 
     def _worker_finished(self) -> None:
+        self._progress_timer.stop()
         self.control_scroll.setEnabled(True)
         self.settings_button.setEnabled(True)
         self.run_button.setEnabled(True)
-        self.progress.setRange(0, 1)
-        self.progress.setValue(1 if self.current_run_succeeded else 0)
+        self.progress.setRange(0, 100)
+        self.progress.setValue(100 if self.current_run_succeeded else 0)
         self.download_button.setEnabled(self.current_run_succeeded and self.last_result is not None)
-        self.terminal.set_running(False)
+        if self.current_run_succeeded:
+            self.terminal.set_status("ready")
+        elif self.terminal.status.text() != "ERROR":
+            self.terminal.set_status("ready")
         self.worker = None
         self._active_request_revision = None
         if self._close_when_finished and self.git_worker is None:
             self.setEnabled(True)
             QTimer.singleShot(0, self.close)
+
+    def _advance_progress(self) -> None:
+        current = self.progress.value()
+        if current < self.PROGRESS_ACTIVE_LIMIT:
+            self.progress.setValue(current + 1)
 
     def _default_save_directory(self) -> Path:
         configured = resolve_project_path(self.settings.get("outputDirectory", "outputs"))

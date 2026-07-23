@@ -44,10 +44,13 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(window.findChild(QLabel, "brandTitle").text(), "PROMPTCASE STUDIO")
         self.assertIsNone(window.findChild(QLabel, "terminalSub"))
         self.assertEqual(window.terminal.status.text(), "READY")
+        self.assertEqual(window.terminal.status.property("state"), "ready")
         window.terminal.set_running(True)
         self.assertEqual(window.terminal.status.text(), "RUNNING")
+        self.assertEqual(window.terminal.status.property("state"), "running")
         window.terminal.set_running(False)
         self.assertEqual(window.terminal.status.text(), "READY")
+        self.assertEqual(window.terminal.status.property("state"), "ready")
         self.assertEqual(len(window.help_buttons), 4)
         self.assertTrue(all(button.toolTip() for button in window.help_buttons))
         self.assertTrue(all(button.width() == 12 for button in window.help_buttons))
@@ -61,7 +64,7 @@ class GuiSmokeTests(unittest.TestCase):
         self.app.processEvents()
         bubble = window.help_buttons[0]._bubble
         self.assertTrue(bubble.isVisible())
-        self.assertEqual(bubble.card.width(), 240)
+        self.assertEqual(bubble.card.width(), bubble.CARD_WIDTH)
         self.assertEqual(bubble.arrow.geometry().right() + 1, bubble.card.geometry().left())
         self.assertEqual(bubble.seam.width(), 3)
         self.assertLessEqual(
@@ -104,6 +107,16 @@ class GuiSmokeTests(unittest.TestCase):
 
         self.assertEqual(roots, [Path(valid)])
         self.assertIn("검색 대상에서 제외", window.terminal.output.toPlainText())
+        window.close()
+
+    def test_project_paths_use_native_windows_separators(self):
+        window = MainWindow()
+        window.folder_list.add_path("C:/Project/promptcase-studio")
+
+        self.assertIn(
+            r"C:\Project\promptcase-studio",
+            window.folder_list.paths(),
+        )
         window.close()
 
     def test_project_path_list_shows_four_full_rows_without_clipping(self):
@@ -156,6 +169,8 @@ class GuiSmokeTests(unittest.TestCase):
 
         warning.assert_called_once_with(window, "AI 사용량 한도 도달", message)
         critical.assert_not_called()
+        self.assertEqual(window.terminal.status.text(), "ERROR")
+        self.assertEqual(window.terminal.status.property("state"), "error")
         window.close()
 
     def test_disabling_modified_date_range_returns_open_range(self):
@@ -344,8 +359,19 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertFalse(window.control_scroll.verticalScrollBar().isVisible())
         self.assertEqual(window.control_scroll.parentWidget().width(), 580)
         self.assertGreaterEqual(window.online_radio.width(), window.online_radio.sizeHint().width())
-        self.assertGreaterEqual(window.date_from.width(), window.date_from.minimumSizeHint().width())
-        self.assertGreaterEqual(window.date_to.width(), window.date_to.minimumSizeHint().width())
+        self.assertGreater(window.date_from_label.x(), window.date_checkbox.geometry().right())
+        self.assertLessEqual(window.date_from.width(), 132)
+        self.assertLessEqual(window.date_to.width(), 132)
+        self.assertGreaterEqual(window.date_from.width(), 110)
+        self.assertGreaterEqual(window.date_to.width(), 110)
+        self.assertEqual(
+            window.date_from_label.font().pixelSize(),
+            window.date_checkbox.font().pixelSize(),
+        )
+        self.assertEqual(
+            window.date_to_label.font().pixelSize(),
+            window.date_checkbox.font().pixelSize(),
+        )
         window.close()
 
     def test_control_panel_is_usable_at_compact_target_resolution(self):
@@ -356,7 +382,7 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(window.size().width(), 1024)
         self.assertEqual(window.size().height(), 576)
         self.assertLessEqual(window.control_scroll.verticalScrollBar().maximum(), 140)
-        self.assertLessEqual(window.control_scroll.verticalScrollBar().maximum(), 120)
+        self.assertLessEqual(window.control_scroll.verticalScrollBar().maximum(), 140)
         self.assertFalse(window.control_scroll.horizontalScrollBar().isVisible())
         self.assertGreaterEqual(window.control_scroll.parentWidget().width(), 500)
         self.assertLessEqual(window.control_scroll.parentWidget().width(), 620)

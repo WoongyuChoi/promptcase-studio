@@ -43,7 +43,7 @@ QLabel#sectionTitle { color: #162033; font-size: 13px; font-weight: 750; }
 QLabel#sectionHint { color: #7D899B; font-size: 13px; }
 QLabel#fieldLabel { color: #49566A; font-size: 14px; font-weight: 650; }
 QLabel#settingsGroupTitle { color: #26354B; font-size: 14px; font-weight: 750; }
-QLabel#dateRangeLabel { color: #667085; font-size: 13px; font-weight: 650; }
+QLabel#dateRangeLabel { color: #667085; font-size: 12px; font-weight: 650; }
 QToolButton#helpBadge {
     color: #718096;
     background: #F4F7FA;
@@ -84,7 +84,8 @@ QWidget#controlPanel QCheckBox {
     min-height: 21px;
     padding: 0;
 }
-QWidget#controlPanel QRadioButton::indicator {
+QWidget#controlPanel QRadioButton::indicator,
+QWidget#controlPanel QCheckBox::indicator {
     width: 12px;
     height: 12px;
 }
@@ -109,7 +110,14 @@ QLineEdit:focus, QDateEdit:focus, QComboBox:focus, QSpinBox:focus, QTextEdit:foc
     border: 1px solid #08A51F;
 }
 QLineEdit:disabled, QTextEdit:disabled { background: #F3F5F8; color: #9BA5B3; }
-QDateEdit#rangeDate { min-width: 136px; max-width: 152px; padding-left: 6px; padding-right: 4px; }
+QWidget#controlPanel QDateEdit#rangeDate {
+    min-width: 96px;
+    max-width: 110px;
+    min-height: 21px;
+    max-height: 21px;
+    padding: 0 4px;
+    font-size: 11px;
+}
 QDateEdit#rangeDate:disabled { background: #F3F5F8; color: #9BA5B3; }
 QListWidget { padding: 2px; }
 QListWidget::item { padding: 3px; border-radius: 5px; }
@@ -283,13 +291,25 @@ QFrame#trafficYellow { background: #FEBC2E; border-radius: 4px; }
 QFrame#trafficGreen { background: #28C840; border-radius: 4px; }
 QLabel#terminalTitle { color: #D8E4F2; font-size: 14px; font-weight: 750; }
 QLabel#terminalStatus {
-    background: #132A20;
-    border: 1px solid #245C3C;
     border-radius: 8px;
-    color: #8DF0A5;
     padding: 2px 6px;
     font-size: 12px;
     font-weight: 700;
+}
+QLabel#terminalStatus[state="ready"] {
+    background: #132A20;
+    border: 1px solid #245C3C;
+    color: #8DF0A5;
+}
+QLabel#terminalStatus[state="running"] {
+    background: #332A14;
+    border: 1px solid #735B1A;
+    color: #FFD66B;
+}
+QLabel#terminalStatus[state="error"] {
+    background: #351A1F;
+    border: 1px solid #7A2D39;
+    color: #FF9CAA;
 }
 QTextEdit#terminalOutput {
     background: #0B1120;
