@@ -202,11 +202,12 @@ QLabel#releaseNoteFieldLabel {
 QLineEdit#releaseNoteSubject {
     min-height: 34px;
     padding: 0 10px;
+    font-family: "Cascadia Mono", "Consolas", "D2Coding", "맑은 고딕", monospace;
     font-size: 13px;
 }
 QTextEdit#releaseNoteBody {
     padding: 10px 12px;
-    font-family: "Pretendard", "맑은 고딕", "Segoe UI";
+    font-family: "Cascadia Mono", "Consolas", "D2Coding", "맑은 고딕", monospace;
     font-size: 13px;
     selection-background-color: #D7E4F7;
     selection-color: #172033;

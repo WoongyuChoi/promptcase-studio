@@ -3,8 +3,8 @@
   "contextPolicyVersion": "3.1.0",
   "responseSchemaVersion": "2.1.0",
   "qualityPolicyVersion": "1.3.0",
-  "releaseNotePromptVersion": "1.0.0",
-  "releaseNoteSchemaVersion": "1.0.0",
+  "releaseNotePromptVersion": "1.1.0",
+  "releaseNoteSchemaVersion": "1.1.0",
   "lastReviewed": "2026-07-23",
   "reviewCadence": "분기 1회 및 템플릿이나 응답 계약 변경 시"
 }

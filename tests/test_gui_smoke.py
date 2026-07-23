@@ -131,7 +131,7 @@ class GuiSmokeTests(unittest.TestCase):
         window.close()
 
     def test_release_note_dialog_is_editable_copyable_and_disposable(self):
-        subject = "[릴리즈 안내] 저장 조건 변경 및 확인 요청"
+        subject = "[공유] 저장 조건 변경"
         body = (
             "안녕하세요.\n\n저장 조건을 변경했습니다.\n\n"
             "변경 사항 유무에 따른 동작을 테스트해 주세요.\n\n감사합니다."
@@ -352,7 +352,7 @@ class GuiSmokeTests(unittest.TestCase):
             suggested_filename="이전결과_단위테스트.xlsx",
             response_path=source,
             scan_bundle=ScanBundle(),
-            release_note_subject="[릴리즈 안내] 이전 결과",
+            release_note_subject="[공유] 이전 결과",
             release_note_body="안녕하세요.\n\n이전 결과입니다.\n\n감사합니다.",
         )
         window.download_button.setEnabled(True)
@@ -402,7 +402,7 @@ class GuiSmokeTests(unittest.TestCase):
             quality_score=53,
             quality_issue_count=5,
             quality_critical_count=4,
-            release_note_subject="[릴리즈 안내] 검토 필요 결과",
+            release_note_subject="[공유] 검토 필요 결과",
             release_note_body="안녕하세요.\n\n검토가 필요한 변경입니다.\n\n감사합니다.",
         )
         window = MainWindow()
