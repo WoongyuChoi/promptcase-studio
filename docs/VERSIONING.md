@@ -25,8 +25,23 @@ python scripts/bump_version.py 4.0.0
 ```
 
 스크립트는 제품 버전과 프롬프트 번들 버전을 함께 갱신한다. 버전 변경 후에는 CHANGELOG를
-작성하고 전체 테스트와 EXE 빌드를 완료한 다음 동일한 버전으로 Git 태그를 생성한다.
+작성하고 전체 테스트와 배포 빌드를 완료한 다음 동일한 버전으로 Git 태그를 생성한다.
 
 ```powershell
-git tag -a v3.3.2 -m "Promptcase Studio 3.3.2"
+$version = python -c "from promptcase_studio import __version__; print(__version__)"
+git tag -a "v$version" -m "Promptcase Studio $version"
 ```
+
+## 릴리즈 체크리스트
+
+1. 변경 수준에 맞춰 `bump_version.py`로 버전을 올린다.
+2. `CHANGELOG.md`에 사용자 관점 변경 사항을 기록한다.
+3. 전체 오프라인 테스트와 버전 일치 검사를 통과한다.
+4. 사내용 기본 릴리즈는 `build-private-folder.bat`으로 빌드한다.
+5. `dist\PromptcaseStudio-{버전}-windows-x64.zip`을 깨끗한 폴더에 모두 압축 해제한다.
+6. 압축 해제한 `PromptcaseStudio.exe`로 시작·종료 smoke test를 수행한다.
+7. ZIP의 SHA-256을 확인하고 동일한 버전의 Git 태그를 만든다.
+
+사용자에게는 버전형 ZIP만 공유한다. 폴더형 `PromptcaseStudio.exe`는 `_internal`에 의존하므로
+실행 파일만 따로 전달하지 않는다. 단일 EXE 빌드는 폴더형 ZIP을 사용할 수 없는 특별한 경우에만
+대체 산출물로 제공한다.

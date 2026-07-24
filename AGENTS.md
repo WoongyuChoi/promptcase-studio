@@ -22,6 +22,13 @@
 - 긴 작업은 QThread에서 실행하고 단계 로그와 가능한 경우 응답 chunk를 UI에 전달한다.
 - 기본 환경은 설정 파일의 `defaultEnvironment`에서 결정하며 초기값은 `online`이다.
 
+## 배포 원칙
+
+- 사용자용 기본 릴리즈는 `PromptcaseStudio-{버전}-windows-x64.zip` 형식의 폴더형 패키지다.
+- 사내 릴리즈는 `build-private-folder.bat`으로 만들고, ZIP을 깨끗한 위치에 풀어 시작과 종료를 검증한다.
+- 폴더형 `PromptcaseStudio.exe`만 따로 배포하지 않으며 `_internal`을 포함한 ZIP 전체를 전달한다.
+- 단일 EXE는 백신·EDR의 `_MEI` 임시 폴더 잠금 가능성이 있으므로 특별한 경우에만 대체 산출물로 제공한다.
+
 ## 프롬프트와 문서
 
 - 프롬프트는 `prompts/`, 구조화 응답 계약은 `schemas/`에서 버전 관리한다.

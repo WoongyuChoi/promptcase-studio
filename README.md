@@ -1,9 +1,51 @@
 # Promptcase Studio
 
-Promptcase Studio는 소스 변경 범위와 개발 의뢰 내용을 분석해 AI로 단위테스트 문안을 만들고,
-기존 Excel 템플릿을 보존한 결과 문서를 생성하는 Windows용 Python GUI 도구입니다.
+소스 변경 근거를 읽고, 검증 가능한 단위테스트 문서와 공유용 릴리즈 노트를 만드는 Windows 데스크톱 도구입니다.
 
-## 핵심 흐름
+![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
+![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)
+![PyQt5](https://img.shields.io/badge/UI-PyQt5-41CD52?logo=qt&logoColor=white)
+![AI](https://img.shields.io/badge/AI-Gemini%20%7C%20Qwen-7C3AED)
+![문서](https://img.shields.io/badge/Output-Excel%20%7C%20Release%20Note-217346)
+![버전](https://img.shields.io/badge/Version-3.4.1-F97316)
+
+[주요 기능](#주요-기능) · [사용자 실행](#사용자-실행) · [동작 방식](#동작-방식) ·
+[개발 환경](#개발-환경-실행) · [릴리즈](#패키지-빌드와-릴리즈) · [문서](#관련-문서)
+
+Promptcase Studio는 프로젝트 전체를 무작정 AI에 보내지 않습니다. Git 변경 이력, 현재 diff,
+사용자 의뢰와 실제 소스의 참조 관계를 조합해 필요한 근거를 선별하고, AI 응답을 로컬 계약과
+품질 규칙으로 검증한 뒤 기존 Excel 템플릿의 서식을 보존해 결과를 생성합니다.
+
+## 주요 기능
+
+| 기능 | 설명 |
+| --- | --- |
+| 변경 범위 분석 | Git commit·diff, 수정일, 수동 변경 파일과 사용자 변경 요약을 함께 분석합니다. |
+| 범용 소스 스캔 | Java·JSP·TypeScript뿐 아니라 Python, SQL/PLSQL, SAP ABAP/CDS, .NET, Go, Rust 등 다양한 환경을 다룹니다. |
+| 연관 근거 선별 | import, include, endpoint, 함수 호출과 DB 객체 관계를 따라 필요한 소스만 제한적으로 포함합니다. |
+| 이중 AI 환경 | 온라인은 Gemini, 폐쇄망은 Qwen을 사용하며 동일한 구조화 응답 계약을 적용합니다. |
+| 안전한 결과 검증 | JSON 구조, 근거 식별자, 테스트 절차와 기대 결과를 검증하고 표현 차이는 안전한 범위에서 자동 정리합니다. |
+| 문서 자동화 | 원본 Excel 서식을 보존한 단위테스트 문서와 팀 공유용 릴리즈 노트 메일을 함께 만듭니다. |
+| 실행 근거 보존 | 선택 파일, 프롬프트, 응답, 품질 보고서와 로그를 실행별 폴더에 남깁니다. |
+
+## 지원 소스 환경
+
+기본 스캐너는 다음 범주를 지원합니다. 목록에 없는 사내 전용 텍스트 소스는
+`scanner.additionalSourceSuffixes` 설정으로 확장자를 추가할 수 있습니다.
+
+| 범주 | 예시 |
+| --- | --- |
+| 웹·애플리케이션 | Java, Kotlin, JSP, JavaScript, TypeScript, TSX, Vue, Python, PHP, Ruby |
+| 데이터·인터페이스 | SQL, PL/SQL, HANA SQLScript, MyBatis XML, GraphQL, Protocol Buffers |
+| SAP | ABAP, CDS, BDEF, SRVD, HANA 객체 |
+| 시스템·배치 | C/C++, C#, Go, Rust, Swift, Scala, Groovy, Dart, COBOL, JCL |
+| 자동화·설정 | PowerShell, Shell, Batch, Terraform, YAML, JSON, TOML |
+
+특정 언어나 프레임워크의 계층 구조를 강제하지 않으며, 인식 가능한 정확한 참조와 변경 근거를
+우선합니다. 사내 전용 문법은 원문과 diff를 분석할 수 있지만 더 깊은 의미 관계가 필요하면
+별도의 언어 프로파일을 추가해야 합니다.
+
+## 동작 방식
 
 1. 분석할 프로젝트 폴더를 하나 이상 선택합니다.
 2. Git Diff, 시작일과 종료일, 수동 변경 파일 목록과 개발자 변경 요약을 조합해 변경 범위를 만듭니다.
@@ -21,7 +63,19 @@ Promptcase Studio는 소스 변경 범위와 개발 의뢰 내용을 분석해 A
 
 날짜 범위의 기본값은 이번 달 1일부터 오늘까지이며 시작일과 종료일을 모두 포함합니다.
 
-## 실행
+## 사용자 실행
+
+릴리즈 파일은 `PromptcaseStudio-{버전}-windows-x64.zip` 형식으로 제공합니다.
+
+1. 전달받은 ZIP을 쓰기 가능한 폴더에 모두 압축 해제합니다.
+2. 압축 해제된 `PromptcaseStudio-{버전}` 폴더를 엽니다.
+3. 폴더 안의 `PromptcaseStudio.exe`를 실행합니다.
+
+`PromptcaseStudio.exe`만 따로 이동하거나 ZIP 내부에서 바로 실행하면 안 됩니다. `_internal`
+폴더에는 Python 런타임과 실행에 필요한 파일이 들어 있으므로 EXE와 항상 함께 있어야 합니다.
+Python은 사용자 PC에 별도로 설치하지 않아도 됩니다.
+
+## 개발 환경 실행
 
 Python 3.11 이상과 PyQt5가 필요합니다.
 
@@ -32,43 +86,52 @@ python main.py
 
 Windows에서는 `run-promptcase-studio.bat`을 더블클릭해도 됩니다.
 
-## 단일 EXE 배포
+## 패키지 빌드와 릴리즈
 
-Windows 사용자에게는 PyInstaller one-file 결과물 하나만 배포할 수 있습니다.
-
-```powershell
-.\build-exe.bat
-```
-
-사내 배포용으로 로컬 Gemini 키와 Qwen 설정까지 포함하려면 아래 명령을 사용합니다.
+사내 사용자에게 전달할 기본 릴리즈는 인증 설정을 포함한 폴더형 ZIP입니다.
 
 ```powershell
-.\build-private-exe.bat
-```
-
-인증정보 포함 EXE의 키는 추출 가능하므로 승인된 사내 경로에서만 배포해야 합니다.
-
-결과는 `dist\PromptcaseStudio.exe`에 생성됩니다. EXE 최초 실행 시 실행 파일이 있는 폴더에
-`config`, `prompts`, `schemas`, `templates`, `runs`, `outputs` 폴더를 자동으로 준비합니다.
-일반 빌드는 사용자가 환경설정에서 키를 저장할 때 같은 위치에 `.env`를 만들고, 사내용 빌드는
-번들에 포함된 인증정보를 최초 실행 시 `.env`와 Qwen 설정으로 준비합니다.
-미수정 기본 프롬프트, 스키마와 템플릿은 새 EXE에서 자동 갱신되며 사용자 수정본은 보존됩니다.
-
-앱 종료 때 백신이나 EDR 때문에 `_MEI` 임시 폴더 정리 경고가 반복되는 PC에는 폴더형
-패키지를 배포할 수 있습니다.
-
-```powershell
-.\build-folder.bat
 .\build-private-folder.bat
 ```
 
-결과는 `dist\PromptcaseStudio-{버전}\`에 생성되고, 배포용
-`dist\PromptcaseStudio-{버전}-windows-x64.zip`도 자동으로 만들어집니다. ZIP에는
-`PromptcaseStudio.exe`와 `_internal`을 포함한 실행 파일 전체가 들어 있습니다.
-실행 파일 하나만 폴더 밖으로 복사하면 실행되지 않습니다.
+결과는 다음 두 위치에 생성됩니다.
+
+```text
+dist\PromptcaseStudio-{버전}\
+dist\PromptcaseStudio-{버전}-windows-x64.zip
+```
+
+릴리즈할 때는 ZIP만 공유합니다. ZIP에는 `PromptcaseStudio.exe`, `_internal`, 실행 안내와
+필수 리소스가 모두 들어 있습니다. 인증정보는 추출될 수 있으므로 승인된 사내 경로에서만
+배포해야 합니다.
+
+인증정보가 없는 공개 폴더형 ZIP은 다음 명령으로 만듭니다.
+
+```powershell
+.\build-folder.bat
+```
+
+단일 EXE가 꼭 필요한 경우에만 다음 빌드를 사용할 수 있습니다.
+
+```powershell
+.\build-exe.bat
+.\build-private-exe.bat
+```
+
+단일 EXE는 실행할 때 `%TEMP%\_MEI...`에 파일을 풀기 때문에 일부 백신·EDR 환경에서 종료
+정리 경고가 발생할 수 있습니다. 따라서 일반 사용자 릴리즈에는 폴더형 ZIP을 우선합니다.
 
 개발 모드에서는 기존 저장소 경로를 그대로 사용합니다. 세부 내용은
 [Windows 패키징 문서](docs/PACKAGING.md)를 참고하세요.
+
+## 생성 결과
+
+| 위치·기능 | 내용 |
+| --- | --- |
+| 테스트케이스 다운로드 | 원본 서식을 보존한 `.xlsx` 단위테스트 문서 |
+| 릴리즈 노트 뷰 | 복사하고 임시 편집할 수 있는 공유용 메일 제목과 본문 |
+| `runs/{실행 ID}/` | 변경 목록, 선택 근거, 프롬프트, AI 원문, 검증·품질 보고서와 로그 |
+| `outputs/` | 저장 대화상자의 기본 출력 위치 |
 
 ## API 설정
 
@@ -125,4 +188,11 @@ outputs/                저장 대화상자의 기본 위치, Git 제외
 runs/                   스캔, 프롬프트, 초안, 품질 보고서, 최종 응답과 로그, Git 제외
 ```
 
-자세한 흐름은 [아키텍처 문서](docs/ARCHITECTURE.md)와 [Excel 템플릿 규약](docs/EXCEL_TEMPLATE.md)을 참고하세요.
+## 관련 문서
+
+- [아키텍처와 분석 흐름](docs/ARCHITECTURE.md)
+- [Windows 패키징](docs/PACKAGING.md)
+- [버전 관리와 릴리즈](docs/VERSIONING.md)
+- [Excel 템플릿 규약](docs/EXCEL_TEMPLATE.md)
+- [보안 원칙](docs/SECURITY.md)
+- [변경 이력](CHANGELOG.md)

@@ -9,8 +9,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 VERSION_FILE = ROOT / "promptcase_studio" / "__init__.py"
 PROMPT_MANIFEST = ROOT / "prompts" / "manifest.json"
+README_FILE = ROOT / "README.md"
 SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
 VERSION_DECLARATION = re.compile(r'^__version__\s*=\s*"(\d+\.\d+\.\d+)"', re.M)
+README_VERSION_BADGE = re.compile(
+    r"(https://img\.shields\.io/badge/Version-)(\d+\.\d+\.\d+)(-[A-Za-z0-9]+)"
+)
 
 
 def read_product_version() -> str:
@@ -18,6 +22,13 @@ def read_product_version() -> str:
     if not match:
         raise SystemExit(f"버전 선언을 찾을 수 없습니다: {VERSION_FILE}")
     return match.group(1)
+
+
+def read_readme_version() -> str:
+    match = README_VERSION_BADGE.search(README_FILE.read_text(encoding="utf-8"))
+    if not match:
+        raise SystemExit(f"README 버전 배지를 찾을 수 없습니다: {README_FILE}")
+    return match.group(2)
 
 
 def next_version(current: str, target: str) -> str:
@@ -37,9 +48,11 @@ def verify_versions() -> str:
     product_version = read_product_version()
     manifest = json.loads(PROMPT_MANIFEST.read_text(encoding="utf-8-sig"))
     prompt_version = str(manifest.get("bundleVersion", ""))
-    if product_version != prompt_version:
+    readme_version = read_readme_version()
+    if len({product_version, prompt_version, readme_version}) != 1:
         raise SystemExit(
-            f"제품 버전({product_version})과 프롬프트 번들 버전({prompt_version})이 다릅니다."
+            "버전이 일치하지 않습니다: "
+            f"제품={product_version}, 프롬프트={prompt_version}, README={readme_version}"
         )
     if not SEMVER_PATTERN.fullmatch(product_version):
         raise SystemExit(f"유효한 SemVer가 아닙니다: {product_version}")
@@ -65,12 +78,21 @@ def update_versions(target: str) -> tuple[str, str]:
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    readme = README_FILE.read_text(encoding="utf-8")
+    README_FILE.write_text(
+        README_VERSION_BADGE.sub(
+            lambda match: f"{match.group(1)}{updated}{match.group(3)}",
+            readme,
+            count=1,
+        ),
+        encoding="utf-8",
+    )
     return current, updated
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Promptcase Studio 제품 버전과 프롬프트 번들 버전을 함께 관리합니다."
+        description="제품, 프롬프트 번들과 README 배지 버전을 함께 관리합니다."
     )
     parser.add_argument("target", nargs="?", help="major, minor, patch 또는 X.Y.Z")
     parser.add_argument(

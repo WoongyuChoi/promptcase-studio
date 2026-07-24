@@ -10,14 +10,20 @@ class VersioningTests(unittest.TestCase):
     def test_product_version_is_semver(self):
         self.assertRegex(__version__, r"^\d+\.\d+\.\d+$")
 
-    def test_product_and_prompt_bundle_versions_match(self):
+    def test_product_prompt_bundle_and_readme_versions_match(self):
         manifest = json.loads(
             (PROJECT_ROOT / "prompts" / "manifest.json").read_text(
                 encoding="utf-8-sig"
             )
         )
+        readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_version = re.search(
+            r"img\.shields\.io/badge/Version-(\d+\.\d+\.\d+)-", readme
+        )
 
         self.assertEqual(manifest["bundleVersion"], __version__)
+        self.assertIsNotNone(readme_version)
+        self.assertEqual(readme_version.group(1), __version__)
 
     def test_response_schema_id_matches_manifest_policy_version(self):
         manifest = json.loads(
@@ -115,16 +121,35 @@ class VersioningTests(unittest.TestCase):
         self.assertIn("_MEI", packaging)
         self.assertIn("폴더 전체", packaging)
 
+    def test_release_docs_make_the_versioned_zip_the_primary_artifact(self):
+        readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+        versioning = (PROJECT_ROOT / "docs" / "VERSIONING.md").read_text(
+            encoding="utf-8"
+        )
+        agent_rules = (PROJECT_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+
+        artifact = "PromptcaseStudio-{버전}-windows-x64.zip"
+        self.assertIn(artifact, readme)
+        self.assertIn(artifact, versioning)
+        self.assertIn(artifact, agent_rules)
+        self.assertIn("ZIP만 공유", readme)
+        self.assertIn("실행 파일만 따로 전달하지 않는다", versioning)
+        self.assertIn("build-private-folder.bat", agent_rules)
+
     def test_private_build_uses_the_runtime_qwen_provider_selector(self):
         spec = (PROJECT_ROOT / "promptcase-studio.spec").read_text(encoding="utf-8")
 
         self.assertIn("select_qwen_provider_entry(", spec)
         self.assertNotIn("selected_provider = provider_entries[0]", spec)
 
-    def test_readme_does_not_pin_a_stale_current_version(self):
-        readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    def test_bump_script_keeps_the_readme_badge_in_sync(self):
+        script = (PROJECT_ROOT / "scripts" / "bump_version.py").read_text(
+            encoding="utf-8"
+        )
 
-        self.assertNotRegex(readme, r"현재 기준 버전은 `\d+\.\d+\.\d+`")
+        self.assertIn("README_FILE", script)
+        self.assertIn("README_VERSION_BADGE", script)
+        self.assertIn("read_readme_version()", script)
 
 
 if __name__ == "__main__":
