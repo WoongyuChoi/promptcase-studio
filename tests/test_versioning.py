@@ -86,11 +86,16 @@ class VersioningTests(unittest.TestCase):
 
         self.assertIn('os.environ.get("PROMPTCASE_PACKAGE_MODE", "onefile")', spec)
         self.assertIn("COLLECT(", spec)
-        self.assertIn('name="PromptcaseStudio-folder"', spec)
+        self.assertIn('name=f"PromptcaseStudio-{app_version}"', spec)
         self.assertIn("exclude_binaries=onedir_enabled", spec)
         self.assertIn("dist\\PromptcaseStudio.exe", onefile_script)
         self.assertIn(
-            "dist\\PromptcaseStudio-folder\\PromptcaseStudio.exe", onefile_script
+            "dist\\PromptcaseStudio-%APP_VERSION%\\PromptcaseStudio.exe",
+            onefile_script,
+        )
+        self.assertIn("Compress-Archive", onefile_script)
+        self.assertIn(
+            "PromptcaseStudio-%APP_VERSION%-windows-x64.zip", onefile_script
         )
         self.assertIn('set "PROMPTCASE_PACKAGE_MODE=onedir"', folder_script)
         self.assertIn('call "%~dp0build-exe.bat" onedir', folder_script)
@@ -105,7 +110,8 @@ class VersioningTests(unittest.TestCase):
 
         self.assertIn("build-folder.bat", packaging)
         self.assertIn("build-private-folder.bat", packaging)
-        self.assertIn("PromptcaseStudio-folder", packaging)
+        self.assertIn("PromptcaseStudio-{버전}", packaging)
+        self.assertIn("-windows-x64.zip", packaging)
         self.assertIn("_MEI", packaging)
         self.assertIn("폴더 전체", packaging)
 

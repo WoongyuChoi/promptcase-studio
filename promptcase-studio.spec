@@ -175,5 +175,5 @@ if onedir_enabled:
         strip=False,
         upx=False,
         upx_exclude=[],
-        name="PromptcaseStudio-folder",
+        name=f"PromptcaseStudio-{app_version}",
     )
