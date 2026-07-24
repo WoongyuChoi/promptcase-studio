@@ -7,6 +7,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from promptcase_studio import __version__
 from promptcase_studio.config import read_dotenv
 from promptcase_studio.models import ChunkCallback, LogCallback
 from promptcase_studio.providers.base import (
@@ -20,6 +21,28 @@ from promptcase_studio.providers.base import (
 )
 
 
+def select_qwen_provider_entry(
+    entries: Any,
+    model_name: object,
+) -> dict[str, Any] | None:
+    """Select the configured model provider, or the first valid entry."""
+
+    if not isinstance(entries, list):
+        return None
+    candidates = [item for item in entries if isinstance(item, dict)]
+    if not candidates:
+        return None
+    selected_model = str(model_name or "")
+    return next(
+        (
+            item
+            for item in candidates
+            if item.get("name") == selected_model or item.get("id") == selected_model
+        ),
+        candidates[0],
+    )
+
+
 def load_qwen_profile(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise ProviderError(f"Qwen settings.json을 찾을 수 없습니다: {path}")
@@ -29,10 +52,9 @@ def load_qwen_profile(path: Path) -> dict[str, Any]:
     entries = settings.get("modelProviders", {}).get(provider_type, [])
     if not isinstance(entries, list) or not entries:
         raise ProviderError(f"Qwen provider 설정이 없습니다: {provider_type}")
-    selected = next(
-        (item for item in entries if item.get("name") == model_name or item.get("id") == model_name),
-        entries[0],
-    )
+    selected = select_qwen_provider_entry(entries, model_name)
+    if selected is None:
+        raise ProviderError(f"Qwen provider 설정이 없습니다: {provider_type}")
     generation_config = selected.get("generationConfig", {})
     if not isinstance(generation_config, dict):
         generation_config = {}
@@ -108,7 +130,7 @@ class QwenProvider(TextGenerationProvider):
     def _headers(self) -> dict[str, str]:
         headers = {
             "Content-Type": "application/json; charset=utf-8",
-            "User-Agent": "PromptcaseStudio/0.1",
+            "User-Agent": f"PromptcaseStudio/{__version__}",
         }
         if self.profile.get("apiKey"):
             headers["Authorization"] = f"Bearer {self.profile['apiKey']}"

@@ -427,6 +427,32 @@ class GuiSmokeTests(unittest.TestCase):
         information.assert_not_called()
         window.close()
 
+    def test_soft_quality_review_warning_distinguishes_reference_items(self):
+        project_root = Path(__file__).resolve().parent.parent
+        source = project_root / "templates" / "unittest_template.xlsx"
+        result = PipelineResult(
+            run_id="soft-review",
+            run_directory=source.parent,
+            document_path=source,
+            suggested_filename="참고검토_단위테스트.xlsx",
+            response_path=source,
+            scan_bundle=ScanBundle(),
+            quality_status="review_required",
+            quality_score=90,
+            quality_issue_count=2,
+            quality_critical_count=0,
+        )
+        window = MainWindow()
+        window._active_request_revision = window._input_revision
+
+        with patch.object(QMessageBox, "warning") as warning:
+            window._pipeline_completed(result)
+
+        warning.assert_called_once()
+        self.assertIn("참고 검토 항목 2건", warning.call_args.args[2])
+        self.assertTrue(window.download_button.isEnabled())
+        window.close()
+
     def test_control_panel_fits_at_reference_resolution(self):
         window = MainWindow()
         window.resize(1500, 900)

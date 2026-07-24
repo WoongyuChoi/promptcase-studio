@@ -4,6 +4,7 @@ import json
 import urllib.request
 from typing import Any
 
+from promptcase_studio import __version__
 from promptcase_studio.models import ChunkCallback, LogCallback
 from promptcase_studio.providers.base import (
     GenerationDiagnostics,
@@ -188,7 +189,7 @@ class GeminiProvider(TextGenerationProvider):
             headers={
                 "Content-Type": "application/json; charset=utf-8",
                 "X-goog-api-key": self.api_key,
-                "User-Agent": "PromptcaseStudio/0.1",
+                "User-Agent": f"PromptcaseStudio/{__version__}",
             },
             method="POST",
         )

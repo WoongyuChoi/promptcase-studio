@@ -75,6 +75,20 @@ class ReleaseNoteTests(unittest.TestCase):
         self.assertTrue(release_note["body"].endswith("감사합니다."))
         self.assertIn("제목:", render_release_note(release_note))
 
+    def test_response_parser_accepts_code_fence_and_surrounding_explanation(self):
+        payload = json.dumps(
+            fallback_release_note(self.structured, "채산관리시스템"),
+            ensure_ascii=False,
+        )
+
+        fenced = parse_release_note_response(f"```json\n{payload}\n```")
+        explained = parse_release_note_response(
+            f"요청하신 릴리즈 노트입니다.\n{payload}\n검토해 주세요."
+        )
+
+        self.assertEqual(fenced, explained)
+        self.assertTrue(fenced["subject"].startswith("[공유] "))
+
     def test_response_parser_repairs_one_duplicate_closing_brace(self):
         raw = """{
           "subject": "[공유] 사용자 저장 조건 변경",
@@ -96,9 +110,18 @@ class ReleaseNoteTests(unittest.TestCase):
 
     def test_response_parser_rejects_multiple_json_objects(self):
         raw = (
+            "응답입니다.\n"
             '{"subject":"[공유] 사용자 저장 조건 변경","body":"본문"}'
+            "\n중간 설명\n"
             '{"subject":"[공유] 다른 변경","body":"다른 본문"}'
+            "\n검토해 주세요."
         )
+
+        with self.assertRaisesRegex(ReleaseNoteValidationError, "여러 개"):
+            parse_release_note_response(raw)
+
+    def test_response_parser_rejects_malformed_object_inside_code_fence(self):
+        raw = '```json\n{"subject":"[공유] 사용자 저장 조건 변경","body":"본문"\n```'
 
         with self.assertRaises(ReleaseNoteValidationError):
             parse_release_note_response(raw)

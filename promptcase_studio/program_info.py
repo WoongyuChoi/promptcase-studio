@@ -8,8 +8,18 @@ DEFAULT_PROGRAM_CATEGORY = "채산관리시스템"
 DEFAULT_DETAIL_CATEGORY = "Program"
 
 _SQL_EXTENSIONS = {
+    ".asddls",
+    ".cds",
+    ".dcls",
     ".ddl",
+    ".ddls",
     ".dml",
+    ".hdbfunction",
+    ".hdbprocedure",
+    ".hdbsequence",
+    ".hdbsynonym",
+    ".hdbtable",
+    ".hdbview",
     ".pkb",
     ".pks",
     ".pls",

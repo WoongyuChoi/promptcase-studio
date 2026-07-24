@@ -3,7 +3,7 @@ from __future__ import annotations
 import ctypes
 import sys
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication
 
@@ -30,6 +30,8 @@ def main() -> int:
     app.setStyleSheet(APP_STYLESHEET)
     window = MainWindow()
     window.show()
+    if "--smoke-test" in sys.argv:
+        QTimer.singleShot(1500, window.close)
     return app.exec_()
 
 

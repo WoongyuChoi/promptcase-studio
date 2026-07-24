@@ -6,6 +6,7 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
+from promptcase_studio import __version__
 from promptcase_studio.providers.base import (
     ProviderError,
     ProviderRateLimitError,
@@ -18,7 +19,11 @@ from promptcase_studio.gemini_models import (
     gemini_model_sequence,
     normalize_gemini_model_id,
 )
-from promptcase_studio.providers.qwen import QwenProvider, load_qwen_profile
+from promptcase_studio.providers.qwen import (
+    QwenProvider,
+    load_qwen_profile,
+    select_qwen_provider_entry,
+)
 from promptcase_studio.response_parser import parse_structured_response
 from tests.test_response_parser import valid_payload
 
@@ -203,6 +208,27 @@ class ProviderParsingTests(unittest.TestCase):
         body = provider._body("fixture prompt")
         self.assertEqual(body["max_tokens"], 4096)
         self.assertNotIn("max_completion_tokens", body)
+
+    def test_qwen_selects_the_provider_matching_the_configured_model(self):
+        entries = [
+            {"id": "first-model", "name": "first", "envKey": "FIRST_MODEL_KEY"},
+            {"id": "second-model", "name": "second", "envKey": "SECOND_MODEL_KEY"},
+        ]
+
+        self.assertIs(
+            select_qwen_provider_entry(entries, "second-model"),
+            entries[1],
+        )
+        self.assertIs(
+            select_qwen_provider_entry(entries, "second"),
+            entries[1],
+        )
+        self.assertIs(
+            select_qwen_provider_entry(entries, "unknown-model"),
+            entries[0],
+        )
+        self.assertIsNone(select_qwen_provider_entry([], "first-model"))
+        self.assertIsNone(select_qwen_provider_entry([None], "first-model"))
 
     def test_qwen_rejects_unsafe_custom_header(self):
         provider = QwenProvider.__new__(QwenProvider)
@@ -460,7 +486,12 @@ class ProviderParsingTests(unittest.TestCase):
             return_value=response,
         ) as gemini_open:
             gemini.generate("plain fixture prompt")
-        gemini_body = json.loads(gemini_open.call_args.args[0].data.decode("utf-8"))
+        gemini_request = gemini_open.call_args.args[0]
+        gemini_body = json.loads(gemini_request.data.decode("utf-8"))
+        self.assertEqual(
+            gemini_request.get_header("User-agent"),
+            f"PromptcaseStudio/{__version__}",
+        )
         self.assertEqual(
             gemini_body["system_instruction"]["parts"][0]["text"],
             "응답은 요청된 JSON 객체 하나만 출력한다.",
@@ -475,6 +506,10 @@ class ProviderParsingTests(unittest.TestCase):
             PROJECT_ROOT / "config" / "qwen.settings.json",
         )
         qwen_body = qwen._body("plain fixture prompt")
+        self.assertEqual(
+            qwen._headers()["User-Agent"],
+            f"PromptcaseStudio/{__version__}",
+        )
         self.assertEqual(
             qwen_body["messages"][0]["content"],
             "응답은 요청된 JSON 객체 하나만 출력한다.",

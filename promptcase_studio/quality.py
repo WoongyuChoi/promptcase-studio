@@ -199,6 +199,7 @@ _GENERIC_FILE_STEMS = {
     "settings",
     "types",
 }
+_DOCUMENTATION_SUFFIXES = {".adoc", ".md", ".rst"}
 
 _IMPLEMENTATION_ARTIFACT = re.compile(
     r"(?:클래스|객체|쿼리|메서드|파일|소스\s*코드|빈|컴포넌트|서비스\s*객체|매퍼\s*파일|"
@@ -650,6 +651,48 @@ def find_overloaded_expected_result(structured: Mapping[str, Any]) -> list[dict[
     ]
 
 
+def find_step_count_mismatch(structured: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Report step alignment problems as reviewable, not structural."""
+
+    test_case = structured.get("testCase")
+    test_result = structured.get("testResult")
+    case = test_case if isinstance(test_case, Mapping) else {}
+    result = test_result if isinstance(test_result, Mapping) else {}
+    procedures = _string_sequence(case.get("procedure"))
+    test_details = _string_sequence(result.get("testDetails"))
+    issues: list[dict[str, Any]] = []
+    if len(procedures) != len(test_details):
+        issues.append(
+            {
+                "code": "step_count_mismatch",
+                "severity": "review",
+                "fields": ["testCase.procedure", "testResult.testDetails"],
+                "message": (
+                    "테스트 절차와 관찰 결과의 항목 수가 다릅니다. 같은 순서로 대응하는지 검토해 주세요"
+                ),
+                "procedure_count": len(procedures),
+                "test_detail_count": len(test_details),
+            }
+        )
+    detail_keys = {re.sub(r"\s+", " ", item).casefold() for item in test_details}
+    overlap = [
+        item
+        for item in procedures
+        if re.sub(r"\s+", " ", item).casefold() in detail_keys
+    ]
+    if overlap:
+        issues.append(
+            {
+                "code": "procedure_result_overlap",
+                "severity": "review",
+                "fields": ["testCase.procedure", "testResult.testDetails"],
+                "message": "테스트 절차와 관찰 결과에 같은 문장이 반복되어 역할 구분을 검토해야 합니다",
+                "examples": overlap[:3],
+            }
+        )
+    return issues
+
+
 def find_scope_inflation(
     structured: Mapping[str, Any],
     changes: Sequence[ChangeItem | Mapping[str, Any]],
@@ -885,6 +928,8 @@ def extract_change_anchors(
     )
     for change in ordered_changes:
         path = _change_value(change, "path").replace("\\", "/")
+        if Path(path).suffix.casefold() in _DOCUMENTATION_SUFFIXES:
+            continue
         stem = Path(path).stem
         if stem.casefold() in _GENERIC_FILE_STEMS:
             continue
@@ -1032,6 +1077,7 @@ def build_quality_report(
         *find_non_actionable_test_steps(structured),
         *find_unnatural_test_data(structured),
         *find_overloaded_expected_result(structured),
+        *find_step_count_mismatch(structured),
         *find_scope_inflation(structured, change_values, note_values),
     ]
     explicit_scenarios = _explicit_scenarios(structured, note_values)
@@ -1059,6 +1105,11 @@ def build_quality_report(
     ]
     covered_anchors = [anchor for anchor in anchors if anchor["covered"]]
     uncovered_anchors = [anchor for anchor in anchors if not anchor["covered"]]
+    actionable_uncovered_anchors = [
+        anchor
+        for anchor in uncovered_anchors
+        if anchor.get("source") == "change_note" or not note_values
+    ]
     categories = _scenario_categories(structured, change_values, note_values)
     uncovered_categories = [
         key
@@ -1080,13 +1131,13 @@ def build_quality_report(
                 ),
             }
         )
-    if uncovered_anchors:
+    if actionable_uncovered_anchors:
         issues.append(
             {
                 "code": "uncovered_change_anchors",
                 "severity": "review",
-                "count": len(uncovered_anchors),
-                "anchors": [anchor["label"] for anchor in uncovered_anchors[:8]],
+                "count": len(actionable_uncovered_anchors),
+                "anchors": [anchor["label"] for anchor in actionable_uncovered_anchors[:8]],
                 "message": "최종 문안에서 직접 확인되지 않는 핵심 변경 앵커가 있습니다",
             }
         )
@@ -1107,9 +1158,22 @@ def build_quality_report(
     scope_inflation_count = sum(
         issue["code"] == "overexpanded_simple_change" for issue in issues
     )
+    step_count_mismatch_count = sum(
+        issue["code"] == "step_count_mismatch" for issue in issues
+    )
+    procedure_result_overlap_count = sum(
+        issue["code"] == "procedure_result_overlap" for issue in issues
+    )
     explicit_scenario_penalty = min(30, len(uncovered_explicit_scenarios) * 10)
-    total_anchor_weight = sum(int(anchor["weight"]) for anchor in anchors)
-    uncovered_anchor_weight = sum(int(anchor["weight"]) for anchor in uncovered_anchors)
+    actionable_anchors = [
+        anchor
+        for anchor in anchors
+        if anchor.get("source") == "change_note" or not note_values
+    ]
+    total_anchor_weight = sum(int(anchor["weight"]) for anchor in actionable_anchors)
+    uncovered_anchor_weight = sum(
+        int(anchor["weight"]) for anchor in actionable_uncovered_anchors
+    )
     anchor_penalty = (
         round(20 * uncovered_anchor_weight / total_anchor_weight)
         if total_anchor_weight
@@ -1124,25 +1188,14 @@ def build_quality_report(
         - min(10, unnatural_data_count * 10)
         - min(10, overloaded_expected_result_count * 10)
         - min(10, scope_inflation_count * 10)
+        - min(12, step_count_mismatch_count * 12)
+        - min(8, procedure_result_overlap_count * 8)
         - explicit_scenario_penalty
         - min(28, len(uncovered_categories) * 7)
         - anchor_penalty,
     )
-    blocking_codes = {
-        "semantic_duplicate",
-        "implementation_as_precondition",
-        "non_actionable_test_step",
-        "keyword_like_test_data",
-        "overloaded_expected_result",
-        "overexpanded_simple_change",
-        "uncovered_explicit_scenario",
-    }
     blocking = any(
-        issue.get("code") in blocking_codes
-        or (
-            issue.get("code") == "uncovered_scenario_category"
-            and issue.get("severity") == "required"
-        )
+        issue.get("severity") == "required"
         for issue in issues
         if isinstance(issue, Mapping)
     )
@@ -1163,6 +1216,8 @@ def build_quality_report(
             "keyword_like_test_data_count": unnatural_data_count,
             "overloaded_expected_result_count": overloaded_expected_result_count,
             "overexpanded_simple_change_count": scope_inflation_count,
+            "step_count_mismatch_count": step_count_mismatch_count,
+            "procedure_result_overlap_count": procedure_result_overlap_count,
             "anchor_count": len(anchors),
             "covered_anchor_count": len(covered_anchors),
             "uncovered_anchor_count": len(uncovered_anchors),
@@ -1232,6 +1287,7 @@ __all__ = [
     "find_implementation_preconditions",
     "find_non_actionable_test_steps",
     "find_overloaded_expected_result",
+    "find_step_count_mismatch",
     "find_scope_inflation",
     "find_semantic_duplicates",
     "find_unnatural_test_data",

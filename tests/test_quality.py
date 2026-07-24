@@ -8,6 +8,7 @@ from promptcase_studio.quality import (
     find_implementation_preconditions,
     find_non_actionable_test_steps,
     find_overloaded_expected_result,
+    find_step_count_mismatch,
     find_scope_inflation,
     find_semantic_duplicates,
     find_unnatural_test_data,
@@ -146,6 +147,30 @@ class QualityTests(unittest.TestCase):
         )
         self.assertEqual(find_overloaded_expected_result(payload), [])
 
+    def test_step_count_mismatch_is_reviewable_but_not_blocking(self):
+        payload = valid_payload()
+        payload["testResult"]["testDetails"] = payload["testResult"]["testDetails"][:2]
+
+        issues = find_step_count_mismatch(payload)
+        report = build_quality_report(payload)
+
+        self.assertEqual(issues[0]["code"], "step_count_mismatch")
+        self.assertEqual(issues[0]["severity"], "review")
+        self.assertEqual(report["metrics"]["step_count_mismatch_count"], 1)
+        self.assertFalse(report["soft_gate"]["blocking"])
+        self.assertLess(report["score"], 95)
+
+    def test_identical_procedure_and_result_is_soft_review_only(self):
+        payload = valid_payload()
+        payload["testResult"]["testDetails"][0] = payload["testCase"]["procedure"][0]
+
+        issues = find_step_count_mismatch(payload)
+        report = build_quality_report(payload)
+
+        self.assertTrue(any(issue["code"] == "procedure_result_overlap" for issue in issues))
+        self.assertEqual(report["metrics"]["procedure_result_overlap_count"], 1)
+        self.assertFalse(report["soft_gate"]["blocking"])
+
     def test_semantic_duplicate_scan_includes_processing_topics(self):
         payload = valid_payload()
         payload["testResult"]["processingDetails"] = [
@@ -225,6 +250,46 @@ class QualityTests(unittest.TestCase):
         )
         self.assertIn("deletion", deleted["categories"])
         self.assertEqual(deleted["weight"], 3)
+
+    def test_documentation_and_secondary_file_anchors_do_not_force_review(self):
+        payload = valid_payload()
+        changes = [
+            ChangeItem("C:/project", "AGENTS.md", "변경", "git-history", True),
+            ChangeItem(
+                "C:/project",
+                "src/main/java/example/MKPIM1110ServiceImpl.java",
+                "변경",
+                "git-history",
+                True,
+            ),
+        ]
+
+        report = build_quality_report(
+            payload,
+            changes,
+            ["활성 사용자 조회 조건을 변경함"],
+        )
+
+        self.assertFalse(
+            any(issue.get("code") == "uncovered_change_anchors" for issue in report["issues"])
+        )
+        self.assertFalse(
+            any(anchor.get("label") == "AGENTS" for anchor in report["uncovered_anchors"])
+        )
+        self.assertGreaterEqual(report["score"], 95)
+
+    def test_warning_quality_issue_is_not_a_critical_blocker(self):
+        payload = valid_payload()
+        payload["testCase"]["preconditions"][0] = (
+            "UserService 서비스 객체가 생성되어 있어야 한다"
+        )
+
+        report = build_quality_report(payload)
+
+        self.assertTrue(
+            any(issue.get("code") == "implementation_as_precondition" for issue in report["issues"])
+        )
+        self.assertFalse(report["soft_gate"]["blocking"])
 
     def test_report_exposes_coverage_categories_score_and_json_contract(self):
         payload = valid_payload()

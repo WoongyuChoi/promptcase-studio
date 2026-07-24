@@ -26,8 +26,13 @@ REQUEST_STOP_TERMS = {
     "프로그램",
 }
 ARCHITECTURE_SUFFIXES = re.compile(
-    r"(?:serviceimpl|controller|service|mapper|repository|api|handler|provider|"
-    r"store|hooks?|types?|dto|vo|model|validator|assembler|page|modal)$",
+    r"(?:serviceimpl|controller|service|usecase|mapper|repository|dao|api|endpoint|"
+    r"handler|provider|store|hooks?|types?|dto|vo|model|schema|validator|assembler|"
+    r"page|modal|route|router|batch|job|step|task|command|query|report|script|include)$",
+    re.IGNORECASE,
+)
+ARTIFACT_QUALIFIERS = re.compile(
+    r"\.(?:clas|prog|fugr|func|intf|incl|tabl|view|ddls|dcls|bdef|srvd)$",
     re.IGNORECASE,
 )
 GENERIC_CHANGE_STEMS = {
@@ -230,6 +235,7 @@ def _logical_change_families(bundle: ScanBundle) -> list[str]:
     seen: set[str] = set()
     for change in bundle.changes:
         stem = Path(change.path).stem.casefold().lstrip(".")
+        stem = ARTIFACT_QUALIFIERS.sub("", stem)
         previous = ""
         while stem and stem != previous:
             previous = stem

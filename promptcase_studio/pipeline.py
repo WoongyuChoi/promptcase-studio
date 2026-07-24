@@ -207,15 +207,38 @@ def _preview(value: str, limit: int = 1_000) -> str:
     return f"{text[:head]}\n표시 한도를 넘어 {len(text) - head:,}자를 생략했습니다"
 
 
-def _correction_prompt(original_prompt: str, previous_response: str, error: Exception) -> str:
-    return (
-        f"{original_prompt}\n\n"
+def _middle_excerpt(value: str, maximum: int) -> str:
+    if len(value) <= maximum:
+        return value
+    marker = "\n\n... 교정 프롬프트 예산에 맞게 중간 근거 생략 ...\n\n"
+    if maximum <= len(marker):
+        return value[:maximum]
+    available = maximum - len(marker)
+    head = int(available * 0.6)
+    return f"{value[:head]}{marker}{value[-(available - head):]}"
+
+
+def _correction_prompt(
+    original_prompt: str,
+    previous_response: str,
+    error: Exception,
+    maximum: int | None = None,
+) -> str:
+    error_text = _middle_excerpt(str(error), 4_000)
+    response_text = _middle_excerpt(previous_response, 16_000)
+    correction = (
         "[응답 형식 교정 요청]\n"
         "이전 응답이 아래 계약 검증을 통과하지 못했습니다. 소스 근거와 원래 지시를 유지하면서 "
         "오류만 바로잡은 JSON 객체 하나를 다시 작성하세요. 설명이나 코드 블록은 출력하지 마세요.\n\n"
-        f"검증 오류\n{error}\n\n"
-        f"이전 응답\n{previous_response}"
+        f"검증 오류\n{error_text}\n\n"
+        f"이전 응답\n{response_text}"
     )
+    if maximum is None:
+        return f"{original_prompt}\n\n{correction}"
+    bounded_maximum = max(1_000, int(maximum))
+    original_budget = max(0, bounded_maximum - len(correction) - 2)
+    bounded_original = _middle_excerpt(original_prompt, original_budget)
+    return f"{bounded_original}\n\n{correction}"[:bounded_maximum]
 
 
 def _provider_diagnostics(provider: Any) -> dict[str, Any]:
@@ -264,6 +287,7 @@ def _generate_validated_response(
     phase_label: str,
     log: LogCallback | None,
     on_chunk: ChunkCallback | None,
+    maximum_prompt_chars: int | None = None,
 ) -> tuple[str, dict[str, Any]]:
     attempt_prompt = base_prompt
     for attempt in range(1, validation_attempts + 1):
@@ -287,7 +311,12 @@ def _generate_validated_response(
             if attempt >= validation_attempts:
                 raise
             _log(log, "RETRY", f"{phase_label} 응답 계약 오류를 교정해 다시 요청: {exc}")
-            attempt_prompt = _correction_prompt(base_prompt, response_text, exc)
+            attempt_prompt = _correction_prompt(
+                base_prompt,
+                response_text,
+                exc,
+                maximum_prompt_chars,
+            )
     raise ResponseValidationError(f"{phase_label} AI 응답 계약 검증을 완료하지 못했습니다.")
 
 
@@ -359,22 +388,11 @@ def _quality_review_prompt(
 
 
 def _critical_quality_issue_count(report: dict[str, Any]) -> int:
-    critical_codes = {
-        "semantic_duplicate",
-        "implementation_as_precondition",
-        "non_actionable_test_step",
-        "keyword_like_test_data",
-        "overloaded_expected_result",
-        "overexpanded_simple_change",
-    }
     return sum(
         1
         for issue in report.get("issues", [])
         if isinstance(issue, dict)
-        and (
-            issue.get("code") in critical_codes
-            or issue.get("severity") == "required"
-        )
+        and issue.get("severity") == "required"
     )
 
 
@@ -582,6 +600,10 @@ def run_pipeline(
     prompt_settings = settings.get("prompt", {})
     if not isinstance(prompt_settings, dict):
         prompt_settings = {}
+    configured_prompt_max = max(
+        50_000,
+        int(prompt_settings.get("maxPromptChars", 420000)),
+    )
     review_reserve = (
         max(0, int(prompt_settings.get("reviewReserveChars", 24000)))
         if quality_review_enabled
@@ -625,6 +647,7 @@ def run_pipeline(
             "초안",
             log,
             on_chunk,
+            configured_prompt_max,
         )
         (run_directory / "response.draft.txt").write_text(response_text, encoding="utf-8")
         response_path.write_text(response_text, encoding="utf-8")
@@ -656,11 +679,23 @@ def run_pipeline(
             f"핵심 문장 문제 {_critical_quality_issue_count(draft_report)}건",
         )
 
-        if quality_review_enabled:
-            configured_prompt_max = max(
-                50_000,
-                int(prompt_settings.get("maxPromptChars", 420000)),
+        review_score_threshold = max(
+            0,
+            min(int(settings.get("qualityReviewScoreThreshold", 95)), 100),
+        )
+        draft_requires_ai_review = (
+            _critical_quality_issue_count(draft_report) > 0
+            or int(draft_report.get("score", 0)) < review_score_threshold
+        )
+        if quality_review_enabled and not draft_requires_ai_review:
+            _log(
+                log,
+                "REVIEW",
+                f"초안 품질 점수가 {draft_report['score']}점이고 필수 문제가 없어 "
+                f"추가 AI 품질 검토를 생략합니다. 기준 {review_score_threshold}점",
             )
+
+        if quality_review_enabled and draft_requires_ai_review:
             review_attempts = max(
                 1,
                 min(int(settings.get("qualityReviewValidationAttempts", 2)), 3),
@@ -707,6 +742,7 @@ def run_pipeline(
                         f"품질 검토 {pass_index}",
                         log,
                         on_chunk,
+                        configured_prompt_max,
                     )
                 except ProviderError as exc:
                     review_interruption = _provider_interruption(exc)
@@ -783,7 +819,12 @@ def run_pipeline(
         critical_issues = _critical_quality_issue_count(selected_report)
         quality_gate_mode = str(settings.get("qualityGateMode", "best_effort")).strip()
         strict_quality_gate = quality_gate_mode == "strict"
-        quality_status = "review_required" if critical_issues else "pass"
+        selected_quality_score = int(selected_report.get("score", 0))
+        quality_status = (
+            "review_required"
+            if critical_issues or selected_quality_score < review_score_threshold
+            else "pass"
+        )
         if critical_issues:
             if (
                 review_interruption
@@ -812,6 +853,13 @@ def run_pipeline(
                 "WARN",
                 f"필수 품질 검토 항목 {critical_issues}건이 남았지만 현재 최선의 계약 검증본으로 "
                 "Excel 초안을 생성합니다. 다운로드 후 품질 진단을 참고해 검토해 주세요.",
+            )
+        elif quality_status == "review_required":
+            _log(
+                log,
+                "WARN",
+                f"필수 차단 문제는 없지만 품질 점수 {selected_quality_score}점이 기준 "
+                f"{review_score_threshold}점보다 낮아 검토 필요 초안으로 생성합니다.",
             )
     except PipelinePausedError as exc:
         _log(log, "PAUSED", str(exc))

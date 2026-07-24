@@ -1,8 +1,8 @@
 {
-  "bundleVersion": "3.3.4",
-  "contextPolicyVersion": "3.1.0",
-  "responseSchemaVersion": "2.1.1",
-  "qualityPolicyVersion": "1.3.0",
+  "bundleVersion": "3.4.0",
+  "contextPolicyVersion": "3.2.0",
+  "responseSchemaVersion": "2.2.0",
+  "qualityPolicyVersion": "1.4.0",
   "releaseNotePromptVersion": "1.1.1",
   "releaseNoteSchemaVersion": "1.1.0",
   "lastReviewed": "2026-07-23",

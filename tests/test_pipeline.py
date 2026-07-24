@@ -9,6 +9,7 @@ from promptcase_studio.config import load_settings
 from promptcase_studio.models import AnalysisRequest, ChangeItem, ContextFile, ScanBundle
 from promptcase_studio.pipeline import (
     PipelinePausedError,
+    _correction_prompt,
     _document_title,
     _program_category,
     _program_info,
@@ -248,6 +249,20 @@ class PipelineTests(unittest.TestCase):
                     "manual",
                     False,
                 ),
+                ChangeItem(
+                    "C:/Project/accounting",
+                    "sap/zi_balance.ddls.asddls",
+                    "신규",
+                    "manual",
+                    True,
+                ),
+                ChangeItem(
+                    "C:/Project/accounting",
+                    "sap/balance_read.hdbprocedure",
+                    "변경",
+                    "manual",
+                    True,
+                ),
             ],
             "통합정산시스템",
         )
@@ -268,6 +283,8 @@ class PipelineTests(unittest.TestCase):
             rows[2]["workContent"],
             "요건 변경에 따른 불필요 SQL 삭제",
         )
+        self.assertEqual(rows[3]["detailCategory"], "SQL")
+        self.assertEqual(rows[4]["detailCategory"], "SQL")
 
     def test_program_category_uses_document_system_and_keeps_legacy_default(self):
         request = AnalysisRequest(
@@ -313,7 +330,7 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue((result.run_directory / "context_bundle.md").exists())
         self.assertTrue((result.run_directory / "evidence.txt").exists())
         self.assertTrue((result.run_directory / "quality-review.json").exists())
-        self.assertTrue((result.run_directory / "prompt.quality-review.md").exists())
+        self.assertFalse((result.run_directory / "prompt.quality-review.md").exists())
         self.assertTrue((result.run_directory / "prompt.release-note.md").exists())
         self.assertTrue((result.run_directory / "release-note.json").exists())
         self.assertTrue((result.run_directory / "release-note.txt").exists())
@@ -332,6 +349,9 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(any(level == "MOCK" for level, _ in logs))
         self.assertTrue(any(level == "CONTEXT" for level, _ in logs))
         self.assertTrue(any(level == "TRACE" and "응답 미리보기" in message for level, message in logs))
+        self.assertTrue(
+            any(level == "REVIEW" and "추가 AI 품질 검토를 생략" in message for level, message in logs)
+        )
 
     def test_invalid_structured_response_is_reprompted_and_preserved(self):
         class InvalidThenValidProvider:
@@ -411,7 +431,7 @@ class PipelineTests(unittest.TestCase):
         ):
             run_pipeline(request, settings)
 
-    def test_retry_prompt_includes_all_independent_validation_errors(self):
+    def test_narrative_token_does_not_trigger_contract_retry(self):
         class MultipleErrorsThenValidProvider:
             def __init__(self):
                 self.prompts = []
@@ -445,11 +465,21 @@ class PipelineTests(unittest.TestCase):
         with patch("promptcase_studio.pipeline.create_provider", return_value=provider):
             run_pipeline(request, settings)
 
-        self.assertEqual(len(provider.prompts), 3)
-        correction_prompt = provider.prompts[1]
-        self.assertIn("응답 계약 오류 2건", correction_prompt)
-        self.assertIn("documentTitle 값이 입력 근거에서 확인되지 않습니다: 재무관리시스템", correction_prompt)
-        self.assertIn("문안의 기술 식별자 또는 코드값이 입력 근거에서 확인되지 않습니다: INACTIVE", correction_prompt)
+        self.assertEqual(len(provider.prompts), 2)
+        self.assertNotIn("[응답 형식 교정 요청]", provider.prompts[1])
+
+    def test_correction_prompt_is_bounded_without_losing_correction_instruction(self):
+        prompt = _correction_prompt(
+            "A" * 60_000,
+            "B" * 30_000,
+            ResponseValidationError("C" * 10_000),
+            maximum=50_000,
+        )
+
+        self.assertLessEqual(len(prompt), 50_000)
+        self.assertIn("[응답 형식 교정 요청]", prompt)
+        self.assertIn("검증 오류", prompt)
+        self.assertIn("이전 응답", prompt)
 
     def test_quality_review_replaces_implementation_precondition_with_better_draft(self):
         class QualityImprovingProvider:
@@ -498,7 +528,7 @@ class PipelineTests(unittest.TestCase):
         self.assertNotIn("서비스 객체", " ".join(document["testCase"]["preconditions"]))
         self.assertTrue(any(level == "REVIEW" for level, _message in logs))
 
-    def test_daily_quota_during_review_preserves_draft_and_quality_diagnostics(self):
+    def test_daily_quota_during_noncritical_review_keeps_valid_draft(self):
         class QuotaAfterDraftProvider:
             def __init__(self):
                 self.calls = 0
@@ -542,11 +572,8 @@ class PipelineTests(unittest.TestCase):
         )
         logs = []
 
-        with (
-            patch("promptcase_studio.pipeline.create_provider", return_value=provider),
-            self.assertRaisesRegex(PipelinePausedError, "일일 요청 한도"),
-        ):
-            run_pipeline(
+        with patch("promptcase_studio.pipeline.create_provider", return_value=provider):
+            result = run_pipeline(
                 request,
                 settings,
                 log=lambda level, message: logs.append((level, message)),
@@ -561,9 +588,10 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(provider.calls, 2)
         self.assertTrue((run_directory / "response.draft.txt").exists())
         self.assertTrue(quality["interruption"]["dailyQuota"])
+        self.assertEqual(result.quality_status, "review_required")
         self.assertTrue(any(level == "QUOTA" for level, _message in logs))
-        self.assertTrue(any(level == "PAUSED" for level, _message in logs))
-        self.assertFalse(any(level == "ERROR" for level, _message in logs))
+        self.assertTrue(any(level == "DONE" for level, _message in logs))
+        self.assertFalse(any(level in {"ERROR", "PAUSED"} for level, _message in logs))
 
     def test_best_effort_gate_exports_draft_when_review_hits_quota(self):
         class QuotaAfterDraftProvider:
@@ -634,7 +662,13 @@ class PipelineTests(unittest.TestCase):
                         status_code=503,
                         detail="This model is currently experiencing high demand.",
                     )
-                return MockProvider().generate(prompt, log=log, on_chunk=on_chunk)
+                payload = json.loads(
+                    MockProvider().generate(prompt, log=log, on_chunk=on_chunk)
+                )
+                payload["testCase"]["preconditions"][0] = (
+                    "UserService 서비스 객체가 생성되어 있어야 한다"
+                )
+                return json.dumps(payload, ensure_ascii=False)
 
         case_directory = TEMP_ROOT / "pipeline-quality-503-best-effort"
         settings = deepcopy(load_settings())
@@ -721,7 +755,7 @@ class PipelineTests(unittest.TestCase):
         )
         self.assertEqual(provider.calls, 3)
         self.assertEqual(result.quality_status, "review_required")
-        self.assertGreater(result.quality_critical_count, 0)
+        self.assertEqual(result.quality_critical_count, 0)
         self.assertTrue(result.document_path.exists())
         self.assertEqual(quality["gateMode"], "best_effort")
         self.assertTrue(any(level == "WARN" for level, _message in logs))

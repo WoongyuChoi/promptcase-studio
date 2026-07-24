@@ -78,6 +78,44 @@ def build_release_note_prompt(
     return prompt
 
 
+def _top_level_json_objects(text: str) -> list[str]:
+    """Return independently parseable top-level JSON objects embedded in text."""
+
+    candidates: list[str] = []
+    depth = 0
+    start = -1
+    in_string = False
+    escaped = False
+    for index, character in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif character == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                candidate = text[start : index + 1]
+                try:
+                    value = json.loads(candidate)
+                except json.JSONDecodeError:
+                    pass
+                else:
+                    if isinstance(value, dict):
+                        candidates.append(candidate)
+                start = -1
+    return candidates
+
+
 def _json_object_brace_balance(text: str) -> int | None:
     depth = 0
     in_string = False
@@ -99,35 +137,34 @@ def _json_object_brace_balance(text: str) -> int | None:
             depth -= 1
             if depth < 0:
                 return None
-    if in_string or escaped:
-        return None
-    return depth
+    return None if in_string or escaped else depth
 
 
 def _load_release_note_json(text: str) -> Any:
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as original_error:
-        try:
-            value, end = json.JSONDecoder().raw_decode(text)
-        except json.JSONDecodeError:
-            value = None
-            end = 0
-        if isinstance(value, dict) and text[end:].strip() == "}":
-            return value
-
+    candidates = _top_level_json_objects(text)
+    if len(candidates) == 1:
+        return json.loads(candidates[0])
+    if len(candidates) > 1:
+        raise ReleaseNoteValidationError(
+            "릴리즈 노트 응답에 JSON 객체가 여러 개 있습니다. JSON 객체 하나만 출력해야 합니다."
+        )
+    if text.startswith("{"):
         if _json_object_brace_balance(text) == 1:
             try:
-                return json.loads(f"{text}}}")
+                repaired = json.loads(f"{text}}}")
             except json.JSONDecodeError:
                 pass
-        raise original_error
+            else:
+                if isinstance(repaired, dict):
+                    return repaired
+        return json.loads(text)
+    raise ReleaseNoteValidationError(
+        "릴리즈 노트 응답에서 JSON 객체를 찾지 못했습니다."
+    )
 
 
 def parse_release_note_response(raw: str) -> dict[str, str]:
     text = raw.lstrip("\ufeff").strip()
-    if not text.startswith("{"):
-        raise ReleaseNoteValidationError("릴리즈 노트 응답은 JSON 객체 하나여야 합니다.")
     try:
         value = _load_release_note_json(text)
     except json.JSONDecodeError as exc:

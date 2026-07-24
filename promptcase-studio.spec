@@ -14,10 +14,19 @@ from PyInstaller.utils.win32.versioninfo import (
     VarStruct,
     VSVersionInfo,
 )
+from promptcase_studio.providers.qwen import select_qwen_provider_entry
 
 
 project_root = Path(SPECPATH).resolve()
 private_bundle_enabled = os.environ.get("PROMPTCASE_PRIVATE_BUNDLE", "").strip() == "1"
+package_mode = (
+    os.environ.get("PROMPTCASE_PACKAGE_MODE", "onefile").strip().lower() or "onefile"
+)
+if package_mode not in {"onefile", "onedir"}:
+    raise SystemExit(
+        "PROMPTCASE_PACKAGE_MODE must be either 'onefile' or 'onedir'."
+    )
+onedir_enabled = package_mode == "onedir"
 version_source = (project_root / "promptcase_studio" / "__init__.py").read_text(
     encoding="utf-8"
 )
@@ -101,7 +110,12 @@ if private_bundle_enabled:
     provider_entries = qwen_settings.get("modelProviders", {}).get(selected_type, [])
     if not isinstance(provider_entries, list) or not provider_entries:
         raise SystemExit("Private Qwen settings do not contain a selected provider.")
-    selected_provider = provider_entries[0]
+    selected_provider = select_qwen_provider_entry(
+        provider_entries,
+        qwen_settings.get("model", {}).get("name", ""),
+    )
+    if selected_provider is None:
+        raise SystemExit("Private Qwen settings do not contain a selected provider.")
     env_key = str(selected_provider.get("envKey", ""))
     embedded_qwen_key = str(qwen_settings.get("env", {}).get(env_key, ""))
     if env_key and not embedded_qwen_key and not dotenv_values.get(env_key):
@@ -132,8 +146,8 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
+    [] if onedir_enabled else a.binaries,
+    [] if onedir_enabled else a.datas,
     [],
     name="PromptcaseStudio",
     debug=False,
@@ -148,6 +162,18 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    exclude_binaries=onedir_enabled,
     icon=[str(project_root / "favicon.ico")],
     version=version_resource,
 )
+
+if onedir_enabled:
+    collect = COLLECT(
+        exe,
+        a.binaries,
+        a.datas,
+        strip=False,
+        upx=False,
+        upx_exclude=[],
+        name="PromptcaseStudio-folder",
+    )

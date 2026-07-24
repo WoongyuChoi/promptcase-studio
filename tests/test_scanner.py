@@ -12,16 +12,20 @@ from promptcase_studio.models import ChangeItem
 from promptcase_studio.scanner import (
     ChangedProfile,
     IndexedFile,
+    _body_exclusion_reason,
     _business_family,
     _candidate_relation,
     _extract_reference_signals,
     _extract_terms,
     _file_role,
     _focused_excerpt,
+    _logical_stem,
+    _normalize_additional_source_suffixes,
     _redact_sensitive_text,
     _read_text,
     _text_similarity,
     _git_diff,
+    build_project_index,
     build_scan_bundle,
     collect_changes,
     collect_date_changes,
@@ -101,6 +105,224 @@ class ScannerTests(unittest.TestCase):
             bounded_path = root / "bounded-utf8.txt"
             bounded_path.write_bytes("가나다".encode("utf-8"))
             self.assertEqual(_read_text(bounded_path, 2), "가나")
+
+    def test_cross_language_sources_and_manifests_are_indexed_without_generated_trees(self):
+        with workspace_temporary_directory() as temporary:
+            root = Path(temporary)
+            files = {
+                "web/order.jsp": "<html/>",
+                "sap/zsales.prog.abap": "REPORT zsales.",
+                "sap/zi_sales.ddls.asddls": "define view entity ZI_Sales",
+                "sap/order.hdbprocedure": "PROCEDURE ORDER_READ AS BEGIN END",
+                "db/order_package.pkb": "CREATE PACKAGE order_package",
+                "mainframe/order_batch.cbl": "IDENTIFICATION DIVISION.",
+                "scripts/deploy.sh": "#!/bin/sh",
+                "pyproject.toml": "[project]",
+                "go.mod": "module example.test/app",
+                "src/App.csproj": "<Project/>",
+                "obj/GeneratedAssemblyInfo.cs": "class GeneratedAssemblyInfo {}",
+                ".tox/site-packages/copied_dependency.py": "def copied(): pass",
+                "vendor/example/dependency.go": "package dependency",
+            }
+            for relative, content in files.items():
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+
+            index, _excluded, truncated = build_project_index(root, 100)
+            indexed = {item.relative_path for item in index}
+
+            self.assertFalse(truncated)
+            self.assertTrue(
+                {
+                    "web/order.jsp",
+                    "sap/zsales.prog.abap",
+                    "sap/zi_sales.ddls.asddls",
+                    "sap/order.hdbprocedure",
+                    "db/order_package.pkb",
+                    "mainframe/order_batch.cbl",
+                    "scripts/deploy.sh",
+                    "pyproject.toml",
+                    "go.mod",
+                    "src/App.csproj",
+                }.issubset(indexed)
+            )
+            self.assertNotIn("obj/GeneratedAssemblyInfo.cs", indexed)
+            self.assertNotIn(".tox/site-packages/copied_dependency.py", indexed)
+            self.assertNotIn("vendor/example/dependency.go", indexed)
+
+    def test_configured_source_suffix_is_normalized_and_used_for_index_and_changed_body(self):
+        with workspace_temporary_directory() as temporary:
+            root = Path(temporary)
+            custom_source = root / "src" / "payment.rulex"
+            custom_source.parent.mkdir(parents=True)
+            custom_source.write_text(
+                "RULE PAYMENT_APPROVAL WHEN amount > limit THEN reject\n",
+                encoding="utf-8",
+            )
+
+            normalized = _normalize_additional_source_suffixes(["rulex", ".RULEX"])
+            self.assertEqual(normalized, frozenset({".rulex"}))
+
+            index, _excluded, _truncated = build_project_index(
+                root,
+                100,
+                additional_source_suffixes=normalized,
+            )
+            self.assertIn("src/payment.rulex", {item.relative_path for item in index})
+            indexed_custom_source = next(
+                item for item in index if item.relative_path == "src/payment.rulex"
+            )
+            self.assertEqual(indexed_custom_source.stem, "payment")
+            custom_signals = _extract_reference_signals(
+                custom_source,
+                custom_source.read_text(encoding="utf-8"),
+                normalized,
+            )
+            self.assertIn(
+                ("file-stem", "payment"),
+                {(signal.kind, signal.value) for signal in custom_signals},
+            )
+
+            bundle = build_scan_bundle(
+                [root],
+                "M src/payment.rulex",
+                None,
+                None,
+                False,
+                {
+                    "additionalSourceSuffixes": ["rulex"],
+                    "maxCandidateFiles": 100,
+                    "maxChangedFileChars": 4000,
+                    "maxRelatedFiles": 0,
+                    "maxContextChars": 8000,
+                },
+            )
+            changed_context = next(
+                item for item in bundle.contexts if item.path == "src/payment.rulex"
+            )
+            self.assertIn("PAYMENT_APPROVAL", changed_context.excerpt)
+            self.assertNotIn("지원하지 않는 확장자", "\n".join(bundle.warnings))
+
+    def test_configured_source_suffix_rejects_empty_paths_wildcards_and_binary_types(self):
+        invalid_values = (
+            "",
+            ".",
+            "../rulex",
+            "source/rulex",
+            "*",
+            ".exe",
+            "archive.zip",
+        )
+        for value in invalid_values:
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    _normalize_additional_source_suffixes([value])
+
+    def test_rust_php_ruby_go_and_csharp_imports_emit_exact_leaf_signals(self):
+        cases = {
+            "src/lib.rs": (
+                "use crate::services::{OrderService, order_mapper};\n"
+                "mod order_rules;\n",
+                {
+                    ("import", "OrderService"),
+                    ("import-file", "services"),
+                    ("import-file", "order_mapper"),
+                    ("import-file", "order_rules"),
+                },
+            ),
+            "src/order.php": (
+                "<?php\n"
+                "use App\\Service\\OrderService;\n"
+                "use App\\Repository\\{OrderRepository as Repo, AuditRepository};\n"
+                "require_once(__DIR__ . '/bootstrap.php');\n",
+                {
+                    ("import", "OrderService"),
+                    ("import", "OrderRepository"),
+                    ("import", "AuditRepository"),
+                    ("import-file", "bootstrap"),
+                },
+            ),
+            "lib/order.rb": (
+                "require 'support/order_validator'\n"
+                "require_relative './order_repository'\n",
+                {
+                    ("import-file", "order_validator"),
+                    ("import-file", "order_repository"),
+                },
+            ),
+            "cmd/main.go": (
+                'import orders "example.com/app/orders"\n'
+                "import (\n"
+                '    "example.com/app/inventory"\n'
+                '    api "example.com/app/client/v2"\n'
+                ")\n",
+                {
+                    ("import-file", "orders"),
+                    ("import-file", "inventory"),
+                    ("import-file", "client"),
+                },
+            ),
+            "src/App.cs": (
+                "global using Acme.Orders.OrderService;\n"
+                "using Rules = Acme.Orders.OrderRules;\n",
+                {
+                    ("import", "OrderService"),
+                    ("import", "OrderRules"),
+                },
+            ),
+        }
+        for path, (source, expected) in cases.items():
+            with self.subTest(path=path):
+                signals = {
+                    (signal.kind, signal.value)
+                    for signal in _extract_reference_signals(Path(path), source)
+                }
+                self.assertTrue(expected.issubset(signals), signals)
+
+    def test_sensitive_config_names_do_not_exclude_business_source_files(self):
+        self.assertEqual(_body_exclusion_reason(Path("CredentialController.java")), "")
+        self.assertEqual(_body_exclusion_reason(Path("SecretManagerService.py")), "")
+        self.assertEqual(
+            _body_exclusion_reason(Path("config/api-credentials.json")),
+            "민감정보 파일 규칙",
+        )
+        self.assertEqual(
+            _body_exclusion_reason(Path("config/client-secret.properties")),
+            "민감정보 파일 규칙",
+        )
+        for value in (
+            "config/prod-api-key.json",
+            "config/my_secret_config.yml",
+            "config/db-password-prod.properties",
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(
+                    _body_exclusion_reason(Path(value)),
+                    "민감정보 파일 규칙",
+                )
+
+    def test_logical_stem_removes_source_and_secondary_role_suffixes(self):
+        expected = {
+            "src/order.service.ts": "order",
+            "src/order.controller.ts": "order",
+            "sap/zsales.prog.abap": "zsales",
+            "sap/zcl_sales.clas.abap": "zcl_sales",
+            "sap/zi_sales.ddls.asddls": "zi_sales",
+        }
+        for value, stem in expected.items():
+            with self.subTest(path=value):
+                self.assertEqual(_logical_stem(Path(value)), stem)
+
+        signals = _extract_reference_signals(
+            Path("src/order.controller.ts"),
+            'import { saveOrder } from "./order.service";',
+        )
+        signal_values = {
+            signal.value for signal in signals if signal.kind in {"file-stem", "import-file"}
+        }
+        self.assertIn("order", signal_values)
+        self.assertNotIn("service", signal_values)
 
     def test_mybatis_placeholders_are_data_fields_only_inside_mapper_xml(self):
         tsx_signals = _extract_reference_signals(
@@ -216,6 +438,280 @@ class ScannerTests(unittest.TestCase):
             self.assertIn("공통 endpoint", related.reason)
             self.assertIn("/api/users/{}", related.reason)
             self.assertIn("frontend-api와 backend-controller 계층 연결", related.reason)
+
+    def test_fastapi_endpoint_connects_frontend_api_across_roots(self):
+        with workspace_temporary_directory() as temporary:
+            workspace = Path(temporary)
+            frontend = workspace / "frontend"
+            backend = workspace / "backend"
+            frontend_file = frontend / "src" / "api" / "userApi.ts"
+            backend_file = backend / "app" / "routers" / "users.py"
+            frontend_file.parent.mkdir(parents=True)
+            backend_file.parent.mkdir(parents=True)
+            frontend_file.write_text(
+                "export const loadUser = (id: string) => "
+                "apiClient.get(`/api/users/${id}`);\n",
+                encoding="utf-8",
+            )
+            backend_file.write_text(
+                "from fastapi import APIRouter\n"
+                'router = APIRouter(prefix="/api/users")\n'
+                '@router.get("/{user_id}")\n'
+                "def get_user(user_id: int):\n"
+                "    return {\"id\": user_id}\n",
+                encoding="utf-8",
+            )
+
+            backend_endpoints = {
+                signal.value
+                for signal in _extract_reference_signals(
+                    backend_file,
+                    backend_file.read_text(encoding="utf-8"),
+                )
+                if signal.kind == "endpoint"
+            }
+            self.assertEqual(backend_endpoints, {"/api/users/{}"})
+            self.assertEqual(_file_role(Path("app/routers/users.py")), "backend-controller")
+            flask_endpoints = {
+                signal.value
+                for signal in _extract_reference_signals(
+                    Path("app/views/orders.py"),
+                    "from flask import Blueprint\n"
+                    'orders = Blueprint("orders", __name__, url_prefix="/api/orders")\n'
+                    '@orders.route("/<int:order_id>")\n'
+                    "def get_order(order_id): return {}\n",
+                )
+                if signal.kind == "endpoint"
+            }
+            self.assertEqual(flask_endpoints, {"/api/orders/{}"})
+
+            bundle = build_scan_bundle(
+                [frontend, backend],
+                "변경: src/api/userApi.ts",
+                None,
+                None,
+                False,
+                {
+                    "maxCandidateFiles": 100,
+                    "maxChangedFileChars": 4000,
+                    "maxRelatedFiles": 4,
+                    "maxRelatedFileChars": 3000,
+                    "maxContextChars": 10000,
+                },
+            )
+            related = next(item for item in bundle.contexts if item.path == "app/routers/users.py")
+            self.assertIn("공통 endpoint", related.reason)
+            self.assertIn("frontend-api와 backend-controller 계층 연결", related.reason)
+
+    def test_jsp_include_and_page_import_are_exact_reference_signals(self):
+        with workspace_temporary_directory() as temporary:
+            root = Path(temporary)
+            page = root / "web" / "orders" / "order.jsp"
+            fragment = root / "web" / "fragments" / "order-summary.tag"
+            page.parent.mkdir(parents=True)
+            fragment.parent.mkdir(parents=True)
+            page.write_text(
+                '<%@ include file="../fragments/order-summary.tag" %>\n'
+                '<%@ page import="com.acme.orders.OrderService" %>\n',
+                encoding="utf-8",
+            )
+            fragment.write_text("<div>주문 요약</div>", encoding="utf-8")
+
+            signals = _extract_reference_signals(
+                page,
+                page.read_text(encoding="utf-8"),
+            )
+            signal_pairs = {(signal.value, signal.kind) for signal in signals}
+            self.assertIn(("order-summary", "import-file"), signal_pairs)
+            self.assertIn(("OrderService", "import"), signal_pairs)
+            self.assertEqual(_file_role(Path("web/orders/order.jsp")), "frontend-view")
+
+            bundle = build_scan_bundle(
+                [root],
+                "변경: web/orders/order.jsp",
+                None,
+                None,
+                False,
+                {
+                    "maxCandidateFiles": 100,
+                    "maxChangedFileChars": 4000,
+                    "maxRelatedFiles": 3,
+                    "maxRelatedFileChars": 2000,
+                    "maxContextChars": 8000,
+                },
+            )
+            related = next(
+                item
+                for item in bundle.contexts
+                if item.path == "web/fragments/order-summary.tag"
+            )
+            self.assertIn("import-file", related.reason)
+
+    def test_sql_general_objects_connect_non_prefixed_database_files(self):
+        with workspace_temporary_directory() as temporary:
+            root = Path(temporary)
+            package = root / "db" / "order_package.pkb"
+            cleanup = root / "db" / "cleanup_order.sql"
+            package.parent.mkdir(parents=True)
+            package.write_text(
+                "CREATE OR REPLACE PACKAGE BODY ORDER_API AS\n"
+                "  PROCEDURE load_orders IS BEGIN\n"
+                "    SELECT * FROM SALES_ORDER;\n"
+                "  END;\n"
+                "END;\n",
+                encoding="utf-8",
+            )
+            cleanup.write_text(
+                "DELETE FROM SALES_ORDER WHERE EXPIRED_YN = 'Y';\n",
+                encoding="utf-8",
+            )
+
+            objects = {
+                signal.value
+                for signal in _extract_reference_signals(
+                    package,
+                    package.read_text(encoding="utf-8"),
+                )
+                if signal.kind == "sql-object"
+            }
+            self.assertEqual(objects, {"ORDER_API", "SALES_ORDER"})
+
+            bundle = build_scan_bundle(
+                [root],
+                "변경: db/order_package.pkb",
+                None,
+                None,
+                False,
+                {
+                    "maxCandidateFiles": 100,
+                    "maxChangedFileChars": 4000,
+                    "maxRelatedFiles": 3,
+                    "maxRelatedFileChars": 2000,
+                    "maxContextChars": 8000,
+                },
+            )
+            related = next(item for item in bundle.contexts if item.path == "db/cleanup_order.sql")
+            self.assertIn("공통 sql-object: SALES_ORDER", related.reason)
+
+    def test_sql_server_bracketed_identifiers_emit_exact_object_signals(self):
+        signals = _extract_reference_signals(
+            Path("db/read_order.sql"),
+            "SELECT * FROM [SalesDb].[dbo].[ORDER_ITEM];\n"
+            "UPDATE [dbo].[ORDER_SUMMARY] SET ITEM_COUNT = 1;\n",
+        )
+        sql_objects = {
+            signal.value
+            for signal in signals
+            if signal.kind == "sql-object"
+        }
+
+        self.assertIn("ORDER_ITEM", sql_objects)
+        self.assertIn("ORDER_SUMMARY", sql_objects)
+
+    def test_abap_and_cds_exact_references_select_class_and_view_sources(self):
+        with workspace_temporary_directory() as temporary:
+            root = Path(temporary)
+            report = root / "sap" / "zsales.prog.abap"
+            service = root / "sap" / "zcl_sales.clas.abap"
+            view = root / "sap" / "zi_sales.ddls.asddls"
+            report.parent.mkdir(parents=True)
+            report.write_text(
+                "REPORT zsales.\n"
+                "DATA service TYPE REF TO zcl_sales.\n"
+                "SELECT * FROM zi_sales INTO TABLE @DATA(rows).\n",
+                encoding="utf-8",
+            )
+            service.write_text(
+                "CLASS zcl_sales DEFINITION PUBLIC.\nENDCLASS.\n",
+                encoding="utf-8",
+            )
+            view.write_text(
+                "define view entity ZI_Sales as select from I_SalesOrder { key SalesOrder }\n",
+                encoding="utf-8",
+            )
+
+            signals = {
+                (signal.value.casefold(), signal.kind)
+                for signal in _extract_reference_signals(
+                    report,
+                    report.read_text(encoding="utf-8"),
+                )
+            }
+            self.assertIn(("zcl_sales", "abap-object"), signals)
+            self.assertIn(("zi_sales", "sql-object"), signals)
+            self.assertEqual(_file_role(Path("sap/zsales.prog.abap")), "backend-service")
+            self.assertEqual(
+                _file_role(Path("sap/zi_sales.ddls.asddls")),
+                "backend-mapper",
+            )
+
+            bundle = build_scan_bundle(
+                [root],
+                "변경: sap/zsales.prog.abap",
+                None,
+                None,
+                False,
+                {
+                    "maxCandidateFiles": 100,
+                    "maxChangedFileChars": 5000,
+                    "maxRelatedFiles": 4,
+                    "maxRelatedFileChars": 2500,
+                    "maxContextChars": 10000,
+                },
+            )
+            related_paths = {item.path for item in bundle.contexts[1:]}
+            self.assertIn("sap/zcl_sales.clas.abap", related_paths)
+            self.assertIn("sap/zi_sales.ddls.asddls", related_paths)
+
+    def test_abap_call_keywords_and_sql_system_tables_do_not_create_shared_object_edges(self):
+        first_abap = _extract_reference_signals(
+            Path("sap/zsales.prog.abap"),
+            "CALL METHOD lo_sales->calculate.\n"
+            "CALL FUNCTION 'Z_SALES_READ'.\n",
+        )
+        second_abap = _extract_reference_signals(
+            Path("sap/zinventory.prog.abap"),
+            "CALL METHOD lo_inventory->recount.\n"
+            "CALL FUNCTION 'Z_INVENTORY_READ'.\n",
+        )
+        first_sql = _extract_reference_signals(
+            Path("db/order_sequence.sql"),
+            "SELECT ORDER_SEQ.NEXTVAL FROM DUAL;\n",
+        )
+        second_sql = _extract_reference_signals(
+            Path("db/user_sequence.sql"),
+            "SELECT USER_SEQ.NEXTVAL FROM DUAL;\n",
+        )
+        hana_sql = _extract_reference_signals(
+            Path("db/current_timestamp.sql"),
+            "SELECT CURRENT_UTCTIMESTAMP FROM SYS.DUMMY;\n",
+        )
+        db2_sql = _extract_reference_signals(
+            Path("db/current_date.sql"),
+            "SELECT CURRENT DATE FROM SYSIBM.SYSDUMMY1;\n",
+        )
+
+        for signals in (
+            first_abap,
+            second_abap,
+            first_sql,
+            second_sql,
+            hana_sql,
+            db2_sql,
+        ):
+            sql_objects = {
+                signal.value.casefold()
+                for signal in signals
+                if signal.kind == "sql-object"
+            }
+            self.assertTrue(
+                {"method", "function", "dual"}.isdisjoint(sql_objects)
+            )
+
+        self.assertIn(
+            ("abap-object", "Z_SALES_READ"),
+            {(signal.kind, signal.value) for signal in first_abap},
+        )
 
     def test_focused_excerpt_stratifies_diff_condition_sql_identifier_and_call(self):
         source_lines = [f"const repeatedStatus = value{index};" for index in range(35)]

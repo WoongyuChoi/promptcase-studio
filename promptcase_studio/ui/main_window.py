@@ -987,13 +987,22 @@ class MainWindow(QMainWindow):
         )
         self.download_button.setEnabled(True)
         if result.quality_status == "review_required":
+            if result.quality_critical_count:
+                quality_detail = (
+                    f"품질 점수 {result.quality_score}점, 필수 검토 항목 "
+                    f"{result.quality_critical_count}건이 남아 있습니다.\n"
+                )
+            else:
+                quality_detail = (
+                    f"품질 점수 {result.quality_score}점, 참고 검토 항목 "
+                    f"{result.quality_issue_count}건이 남아 있습니다.\n"
+                )
             _show_alert(
                 QMessageBox.warning,
                 self,
                 "검토 필요 초안 생성 완료",
                 "다운로드 가능한 최선의 초안을 생성했습니다.\n"
-                f"품질 점수 {result.quality_score}점, 필수 검토 항목 "
-                f"{result.quality_critical_count}건이 남아 있습니다.\n"
+                f"{quality_detail}"
                 "릴리즈 노트 뷰에서 공유 메일을 확인할 수 있습니다.\n"
                 "저장 후 실행 폴더의 품질 진단과 문안을 함께 확인해 주세요.",
             )

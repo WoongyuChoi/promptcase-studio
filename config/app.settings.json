@@ -10,6 +10,7 @@
   "qualityReviewEnabled": true,
   "qualityReviewPasses": 2,
   "qualityReviewValidationAttempts": 2,
+  "qualityReviewScoreThreshold": 95,
   "qualityGateMode": "best_effort",
   "providers": {
     "online": {
@@ -38,6 +39,7 @@
     }
   },
   "scanner": {
+    "additionalSourceSuffixes": [],
     "maxCandidateFiles": 20000,
     "maxChangedFileChars": 48000,
     "maxRelatedFiles": 32,

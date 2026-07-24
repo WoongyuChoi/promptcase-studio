@@ -48,10 +48,11 @@ class _ValidationCollector:
             raise ResponseValidationError(self.errors)
 
 
-FORBIDDEN_DECORATION = re.compile(r"[\\:;：；·ㆍ‧∙⋅○●•◦▪▫◆◇▶▷■□※★☆♥♡♠♣\"'“”‘’「」『』＂＇`*#><\[\]{}|~]")
-ENDING_PUNCTUATION = (".", ",", "!", "?", ";", ":")
-LEADING_LIST_MARK = re.compile(r"^\s*(?:[-*#>]|\d+[.)])\s*")
-TECHNICAL_ID = re.compile(r"^[A-Za-z0-9가-힣_./-]+$")
+LEADING_LIST_MARK = re.compile(
+    r"^\s*(?:(?:[-*#>○●•◦▪▫◆◇▶▷■□※]+)|\d+[.)])\s*"
+)
+TRAILING_PUNCTUATION = ".。,，!！?？;；:："
+TECHNICAL_ID = re.compile(r"^[A-Za-z0-9가-힣_./\\:#=~\[\]<>@$-]+$")
 GENERIC_ONLY = {
     "결과를 확인한다",
     "기능을 확인한다",
@@ -62,32 +63,91 @@ GENERIC_ONLY = {
     "정상 동작한다",
     "정상 처리된다",
 }
-GROUNDABLE_TOKEN = re.compile(
-    r"(?<![A-Za-z0-9_])(?:[A-Z][A-Z0-9_./-]{3,}|"
-    r"[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9_]*)+|"
-    r"[a-z][a-z0-9]+(?:[A-Z][A-Za-z0-9_]*)+|"
-    r"[a-z][A-Za-z_]*\d+[A-Za-z0-9_]*|"
-    r"(?:test|sample|dummy|mock|demo)[a-z0-9_-]{2,}|"
-    r"Spring(?:Boot)?|React|Oracle|Kafka|Redis|MySQL|PostgreSQL|MSSQL|H2|\d{4,})"
-    r"(?![A-Za-z0-9_])|"
-    r"(?:최고|슈퍼|시스템|운영|마스터|총괄)[가-힣]{0,8}(?:관리자|권한|계정)|"
-    r"스프링(?:부트)?|리액트|오라클|카프카|레디스"
-)
+def _top_level_json_objects(text: str) -> list[str]:
+    """Return independently parseable top-level JSON objects embedded in text."""
+
+    candidates: list[str] = []
+    depth = 0
+    start = -1
+    in_string = False
+    escaped = False
+    for index, character in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif character == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                candidate = text[start : index + 1]
+                try:
+                    value = json.loads(candidate)
+                except json.JSONDecodeError:
+                    pass
+                else:
+                    if isinstance(value, dict):
+                        candidates.append(candidate)
+                start = -1
+    return candidates
+
+
+def _json_object_brace_balance(text: str) -> int | None:
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth < 0:
+                return None
+    return None if in_string or escaped else depth
 
 
 def _extract_json_text(raw: str) -> str:
     text = raw.lstrip("\ufeff").strip()
-    if not text.startswith("{") or not text.endswith("}"):
-        if "```" in text:
-            raise ResponseValidationError(
-                "AI 응답에 Markdown 코드 펜스가 있습니다. JSON 객체 하나만 출력해야 합니다."
-            )
-        if "{" in text and "}" in text:
-            raise ResponseValidationError(
-                "AI 응답의 JSON 앞뒤에 설명이 있습니다. JSON 객체 하나만 출력해야 합니다."
-            )
-        raise ResponseValidationError("AI 응답에서 JSON 객체를 찾지 못했습니다.")
-    return text
+    candidates = _top_level_json_objects(text)
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        raise ResponseValidationError(
+            "AI 응답에 JSON 객체가 여러 개 있습니다. JSON 객체 하나만 출력해야 합니다."
+        )
+    # Preserve a malformed object-shaped response so json.loads can report the
+    # precise syntax error in the correction request.
+    if text.startswith("{"):
+        if _json_object_brace_balance(text) == 1:
+            repaired = f"{text}}}"
+            try:
+                value = json.loads(repaired)
+            except json.JSONDecodeError:
+                pass
+            else:
+                if isinstance(value, dict):
+                    return repaired
+        return text
+    raise ResponseValidationError("AI 응답에서 JSON 객체를 찾지 못했습니다.")
 
 
 def _ensure_keys(
@@ -133,17 +193,9 @@ def _human_text(
     text = re.sub(r"[\r\n\t]+", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     text = LEADING_LIST_MARK.sub("", text, count=1).strip()
-    text = text.rstrip(".。").rstrip()
+    text = text.rstrip(TRAILING_PUNCTUATION).rstrip()
     if not minimum <= len(text) <= maximum:
         raise ResponseValidationError(f"{field} 길이는 {minimum}~{maximum}자여야 합니다.")
-    if FORBIDDEN_DECORATION.search(text):
-        raise ResponseValidationError(
-            f"{field}에 콜론, 세미콜론, 가운데점, 장식 기호, Markdown 기호 또는 따옴표를 사용할 수 없습니다."
-        )
-    if text.endswith(ENDING_PUNCTUATION):
-        raise ResponseValidationError(f"{field} 끝에 문장 부호를 붙이지 마세요.")
-    if text.endswith((".", ",", "!", "?", ";", "。", "，", "！", "？")):
-        raise ResponseValidationError(f"{field} 끝에 불필요한 문장 부호를 붙이지 마세요.")
     if endings and not text.endswith(endings):
         ending_text = " 또는 ".join(endings)
         raise ResponseValidationError(f"{field}는 {ending_text}로 끝나는 완결된 문장이어야 합니다.")
@@ -153,9 +205,16 @@ def _human_text(
 
 
 def _unique(items: list[str], field: str) -> list[str]:
-    keys = [re.sub(r"\s+", " ", item).casefold() for item in items]
-    if len(keys) != len(set(keys)):
-        raise ResponseValidationError(f"{field}에 중복된 항목이 있습니다.")
+    del field  # Kept for caller compatibility and future normalization diagnostics.
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        key = re.sub(r"\s+", " ", item).casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(item)
+    items[:] = normalized
     return items
 
 
@@ -172,8 +231,6 @@ def _human_list(
     if not isinstance(value, list):
         raise ResponseValidationError(f"{field}는 문자열 배열이어야 합니다.")
     errors: list[str] = []
-    if not minimum_items <= len(value) <= maximum_items:
-        errors.append(f"{field} 항목 수는 {minimum_items}~{maximum_items}개여야 합니다.")
     items: list[str] = []
     for index, item in enumerate(value):
         try:
@@ -192,13 +249,15 @@ def _human_list(
         _unique(items, field)
     except ResponseValidationError as exc:
         errors.extend(exc.errors)
+    if not minimum_items <= len(items) <= maximum_items:
+        errors.append(f"{field} 항목 수는 {minimum_items}~{maximum_items}개여야 합니다.")
     if errors:
         raise ResponseValidationError(errors)
     return items
 
 
 def _identifier_list(value: Any, field: str) -> list[str]:
-    if not isinstance(value, list) or len(value) > 12:
+    if not isinstance(value, list):
         raise ResponseValidationError(f"{field}는 최대 12개의 문자열 배열이어야 합니다.")
     items: list[str] = []
     errors: list[str] = []
@@ -216,13 +275,15 @@ def _identifier_list(value: Any, field: str) -> list[str]:
         _unique(items, field)
     except ResponseValidationError as exc:
         errors.extend(exc.errors)
+    if len(items) > 12:
+        errors.append(f"{field}는 최대 12개의 문자열 배열이어야 합니다.")
     if errors:
         raise ResponseValidationError(errors)
     return items
 
 
 def _target_name_list(value: Any, field: str) -> list[str]:
-    if not isinstance(value, list) or len(value) > 12:
+    if not isinstance(value, list):
         raise ResponseValidationError(f"{field}는 최대 12개의 문자열 배열이어야 합니다.")
     items: list[str] = []
     errors: list[str] = []
@@ -235,6 +296,8 @@ def _target_name_list(value: Any, field: str) -> list[str]:
         _unique(items, field)
     except ResponseValidationError as exc:
         errors.extend(exc.errors)
+    if len(items) > 12:
+        errors.append(f"{field}는 최대 12개의 문자열 배열이어야 합니다.")
     if errors:
         raise ResponseValidationError(errors)
     return items
@@ -242,7 +305,6 @@ def _target_name_list(value: Any, field: str) -> list[str]:
 
 def _validate_grounded_targets(
     target_ids: list[str],
-    target_names: list[str],
     evidence_text: str | None,
 ) -> None:
     if evidence_text is None:
@@ -255,25 +317,22 @@ def _validate_grounded_targets(
         )
         if not pattern.search(evidence):
             errors.append(f"testCase.targetIds 값이 입력 근거에서 확인되지 않습니다: {value}")
-    for value in target_names:
-        if value.casefold() not in evidence:
-            errors.append(f"testCase.targetNames 값이 입력 근거에서 확인되지 않습니다: {value}")
     if errors:
         raise ResponseValidationError(errors)
 
 
-def _validate_grounded_content(values: Iterable[str], evidence_text: str | None) -> None:
+def _grounded_target_names(
+    target_names: list[str],
+    evidence_text: str | None,
+) -> list[str]:
     if evidence_text is None:
-        return
-    evidence = evidence_text.casefold()
-    errors: list[str] = []
-    for value in values:
-        for match in GROUNDABLE_TOKEN.finditer(value):
-            token = match.group(0)
-            if token.casefold() not in evidence:
-                errors.append(f"문안의 기술 식별자 또는 코드값이 입력 근거에서 확인되지 않습니다: {token}")
-    if errors:
-        raise ResponseValidationError(errors)
+        return target_names
+    normalized_evidence = re.sub(r"\s+", " ", evidence_text).casefold()
+    return [
+        value
+        for value in target_names
+        if re.sub(r"\s+", " ", value).casefold() in normalized_evidence
+    ]
 
 
 def _raw_string(value: Any) -> str:
@@ -290,8 +349,6 @@ def _processing_details(value: Any) -> list[dict[str, str]]:
     if not isinstance(value, list):
         raise ResponseValidationError("testResult.processingDetails는 객체 배열이어야 합니다.")
     errors: list[str] = []
-    if not 1 <= len(value) <= 5:
-        errors.append("testResult.processingDetails 항목 수는 1~5개여야 합니다.")
     normalized: list[dict[str, str]] = []
     titles: list[str] = []
     for index, item in enumerate(value):
@@ -332,6 +389,20 @@ def _processing_details(value: Any) -> list[dict[str, str]]:
         _unique(titles, "testResult.processingDetails 제목")
     except ResponseValidationError as exc:
         errors.extend(exc.errors)
+    deduplicated: list[dict[str, str]] = []
+    seen_rows: set[tuple[str, str]] = set()
+    for item in normalized:
+        key = (
+            re.sub(r"\s+", " ", item["title"]).casefold(),
+            re.sub(r"\s+", " ", item["detail"]).casefold(),
+        )
+        if key in seen_rows:
+            continue
+        seen_rows.add(key)
+        deduplicated.append(item)
+    normalized = deduplicated
+    if not 1 <= len(normalized) <= 5:
+        errors.append("testResult.processingDetails 항목 수는 1~5개여야 합니다.")
     if errors:
         raise ResponseValidationError(errors)
     return normalized
@@ -408,44 +479,40 @@ def parse_structured_response(raw: str, evidence_text: str | None = None) -> dic
         )
 
     raw_document_title = _raw_string(data.get("documentTitle", ""))
-    document_title = collector.capture(
-        lambda: _human_text(
-            data.get("documentTitle", ""),
-            "documentTitle",
-            minimum=2,
-            maximum=40,
-            allow_empty=True,
-        ),
-        raw_document_title,
+    invalid_document_title = bool(
+        raw_document_title
+        and (
+            not 2 <= len(raw_document_title) <= 40
+            or re.search(r"단위\s*테스트", raw_document_title)
+            or raw_document_title.casefold().endswith(".xlsx")
+            or re.search(r"[()（）]", raw_document_title)
+            or re.search(
+                r"(?:19|20)\d{2}[-_.]?\d{2}[-_.]?\d{2}|(?<!\d)\d{6}(?!\d)",
+                raw_document_title,
+            )
+        )
     )
-    if raw_document_title and (
-        re.search(r"단위\s*테스트", raw_document_title)
-        or raw_document_title.casefold().endswith(".xlsx")
-    ):
-        collector.add("documentTitle에는 단위테스트 문구나 파일 확장자를 넣지 마세요.")
-    if raw_document_title and re.search(r"[()（）]", raw_document_title):
-        collector.add("documentTitle에는 괄호를 넣지 마세요.")
-    if raw_document_title and re.search(
-        r"(?:19|20)\d{2}[-_.]?\d{2}[-_.]?\d{2}|(?<!\d)\d{6}(?!\d)",
-        raw_document_title,
-    ):
-        collector.add("documentTitle에는 날짜나 시간을 넣지 마세요.")
-    if raw_document_title and evidence_text is not None:
-        normalized_title = re.sub(r"\s+", "", raw_document_title).casefold()
+    document_title = "" if invalid_document_title else raw_document_title
+    if document_title and evidence_text is not None:
+        normalized_title = re.sub(r"\s+", "", document_title).casefold()
         normalized_evidence = re.sub(r"\s+", "", evidence_text).casefold()
         if normalized_title not in normalized_evidence:
-            collector.add(
-                f"documentTitle 값이 입력 근거에서 확인되지 않습니다: {raw_document_title}"
-            )
+            document_title = ""
 
     name = ""
     if "name" in test_case:
+        name_candidate = _raw_string(test_case.get("name"))
+        suffix_match = re.search(r"\s*단위\s*테스트\s*$", name_candidate)
+        if suffix_match:
+            name_candidate = (
+                f"{name_candidate[:suffix_match.start()].rstrip()} 단위테스트".strip()
+            )
+        elif name_candidate:
+            name_candidate = f"{name_candidate} 단위테스트"
         name = collector.capture(
-            lambda: _human_text(test_case.get("name"), "testCase.name", minimum=6, maximum=100),
+            lambda: _human_text(name_candidate, "testCase.name", minimum=6, maximum=100),
             _raw_string(test_case.get("name")),
         )
-    if test_case_is_object and not name.endswith("단위테스트"):
-        collector.add("testCase.name은 단위테스트로 끝나야 합니다.")
 
     procedure: list[str] = []
     if "procedure" in test_case:
@@ -467,7 +534,7 @@ def parse_structured_response(raw: str, evidence_text: str | None = None) -> dic
             lambda: _human_list(
                 test_case.get("preconditions"),
                 "testCase.preconditions",
-                1,
+                0,
                 5,
                 minimum_chars=8,
                 maximum_chars=160,
@@ -488,9 +555,10 @@ def parse_structured_response(raw: str, evidence_text: str | None = None) -> dic
             _raw_string_list(test_case.get("targetNames")),
         )
     collector.capture(
-        lambda: _validate_grounded_targets(target_ids, target_names, evidence_text),
+        lambda: _validate_grounded_targets(target_ids, evidence_text),
         None,
     )
+    target_names = _grounded_target_names(target_names, evidence_text)
 
     normalized_processing: list[dict[str, str]] = []
     if "processingDetails" in test_result:
@@ -509,17 +577,10 @@ def parse_structured_response(raw: str, evidence_text: str | None = None) -> dic
                 5,
                 minimum_chars=8,
                 maximum_chars=160,
-                endings=("확인한다",),
+                endings=("다",),
             ),
             _raw_string_list(test_result.get("testDetails")),
         )
-    if {item.casefold() for item in procedure} & {item.casefold() for item in test_details}:
-        collector.add("procedure와 testDetails는 절차와 확인 결과를 구분해 작성해야 합니다.")
-    if procedure and test_details and len(procedure) != len(test_details):
-        collector.add(
-            "testResult.testDetails는 testCase.procedure와 같은 항목 수로 대응해 작성해야 합니다."
-        )
-
     notes = ""
     if "notes" in test_case:
         notes = collector.capture(
@@ -540,7 +601,8 @@ def parse_structured_response(raw: str, evidence_text: str | None = None) -> dic
                 "testCase.testData",
                 minimum=10,
                 maximum=180,
-                endings=("한다",),
+                endings=("다",),
+                allow_empty=True,
             ),
             _raw_string(test_case.get("testData")),
         )
@@ -569,24 +631,6 @@ def parse_structured_response(raw: str, evidence_text: str | None = None) -> dic
             ),
             _raw_string_list(test_result.get("resultChecks")),
         )
-    collector.capture(
-        lambda: _validate_grounded_content(
-            [
-                name,
-                *procedure,
-                *preconditions,
-                test_data,
-                expected_result,
-                notes,
-                *(item["title"] for item in normalized_processing),
-                *(item["detail"] for item in normalized_processing),
-                *test_details,
-                *result_checks,
-            ],
-            evidence_text,
-        ),
-        None,
-    )
     collector.raise_if_any()
 
     return {

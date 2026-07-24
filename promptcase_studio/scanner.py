@@ -15,15 +15,32 @@ from promptcase_studio.models import ChangeItem, ContextFile, LogCallback, ScanB
 
 
 EXCLUDED_DIRECTORIES = {
+    ".angular",
+    ".cache",
+    ".gradle",
     ".git",
     ".idea",
+    ".mypy_cache",
+    ".next",
+    ".nox",
+    ".nuxt",
+    ".parcel-cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".svelte-kit",
+    ".tox",
+    ".turbo",
     ".vscode",
     ".venv",
+    "__pypackages__",
     "venv",
     "node_modules",
     "build",
     "dist",
+    "obj",
+    "out",
     "target",
+    "vendor",
     "coverage",
     "outputs",
     "runs",
@@ -34,7 +51,10 @@ EXCLUDED_DIRECTORIES = {
 ALLOWED_SUFFIXES = {
     ".java",
     ".kt",
+    ".kts",
     ".py",
+    ".rb",
+    ".php",
     ".js",
     ".mjs",
     ".cjs",
@@ -45,15 +65,81 @@ ALLOWED_SUFFIXES = {
     ".tsx",
     ".vue",
     ".sql",
+    ".ddl",
+    ".dml",
+    ".pkb",
+    ".pks",
+    ".pls",
+    ".plsql",
+    ".psql",
+    ".jsp",
+    ".jspx",
+    ".tag",
+    ".tagx",
+    ".abap",
+    ".cds",
+    ".asddls",
+    ".ddls",
+    ".dcls",
+    ".bdef",
+    ".srvd",
+    ".hdbprocedure",
+    ".hdbfunction",
+    ".hdbview",
+    ".hdbtable",
+    ".hdbsynonym",
+    ".hdbsequence",
+    ".xsjs",
+    ".xsodata",
     ".xml",
     ".yml",
     ".yaml",
     ".json",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".conf",
     ".properties",
     ".gradle",
     ".cs",
+    ".fs",
+    ".vb",
+    ".csproj",
+    ".fsproj",
+    ".vbproj",
+    ".sln",
+    ".razor",
+    ".cshtml",
     ".go",
     ".rs",
+    ".c",
+    ".h",
+    ".cc",
+    ".cpp",
+    ".cxx",
+    ".hpp",
+    ".swift",
+    ".scala",
+    ".groovy",
+    ".dart",
+    ".cob",
+    ".cbl",
+    ".cpy",
+    ".jcl",
+    ".proto",
+    ".graphql",
+    ".gql",
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".ps1",
+    ".bat",
+    ".cmd",
+    ".tf",
+    ".ftl",
+    ".vm",
+    ".mustache",
+    ".hbs",
     ".html",
     ".css",
     ".scss",
@@ -68,17 +154,163 @@ ALLOWED_NAMES = {
     "settings.gradle",
     "package.json",
     "tsconfig.json",
+    "pyproject.toml",
+    "requirements.txt",
+    "setup.cfg",
+    "pipfile",
+    "pipfile.lock",
+    "poetry.lock",
+    "go.mod",
+    "go.sum",
+    "cargo.toml",
+    "cargo.lock",
+    "gemfile",
+    "gemfile.lock",
+    "composer.json",
+    "gradlew",
+    "mvnw",
 }
 
-SENSITIVE_NAME_PARTS = {
+SENSITIVE_CONFIG_TOKENS = {
     "credential",
     "credentials",
+    "password",
+    "passwd",
     "secret",
     "secrets",
+    "token",
+    "clientsecret",
+    "client_secret",
+    "apikey",
+    "api_key",
+}
+
+SENSITIVE_EXACT_NAMES = {
+    ".npmrc",
+    ".pypirc",
     "private_key",
     "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
     "keystore",
     "truststore",
+    "settings.xml",
+}
+
+SENSITIVE_CONFIG_SUFFIXES = {
+    ".cfg",
+    ".conf",
+    ".ini",
+    ".json",
+    ".properties",
+    ".toml",
+    ".xml",
+    ".yaml",
+    ".yml",
+}
+
+UNSAFE_ADDITIONAL_SOURCE_SUFFIXES = {
+    ".7z",
+    ".class",
+    ".dll",
+    ".dylib",
+    ".ear",
+    ".env",
+    ".exe",
+    ".gz",
+    ".jar",
+    ".jks",
+    ".key",
+    ".p12",
+    ".pem",
+    ".pfx",
+    ".pyc",
+    ".pyo",
+    ".rar",
+    ".so",
+    ".tar",
+    ".war",
+    ".zip",
+}
+
+SQL_SOURCE_SUFFIXES = {
+    ".asddls",
+    ".cds",
+    ".dcls",
+    ".ddl",
+    ".ddls",
+    ".dml",
+    ".hdbfunction",
+    ".hdbprocedure",
+    ".hdbsequence",
+    ".hdbsynonym",
+    ".hdbtable",
+    ".hdbview",
+    ".pkb",
+    ".pks",
+    ".pls",
+    ".plsql",
+    ".psql",
+    ".sql",
+}
+
+SQL_OBJECT_NOISE = {
+    "dual",
+    "dummy",
+    "function",
+    "method",
+    "screen",
+    "sysdummy1",
+    "transaction",
+}
+
+JSP_SOURCE_SUFFIXES = {".jsp", ".jspx", ".tag", ".tagx"}
+
+ABAP_SOURCE_SUFFIXES = {
+    ".abap",
+    ".asddls",
+    ".bdef",
+    ".cds",
+    ".dcls",
+    ".ddls",
+    ".srvd",
+}
+
+DOTTED_FILE_QUALIFIERS = {
+    "api",
+    "bdef",
+    "clas",
+    "client",
+    "component",
+    "controller",
+    "dao",
+    "dcls",
+    "ddls",
+    "dto",
+    "entity",
+    "func",
+    "fugr",
+    "handler",
+    "hook",
+    "intf",
+    "mapper",
+    "modal",
+    "model",
+    "module",
+    "page",
+    "prog",
+    "provider",
+    "repository",
+    "route",
+    "router",
+    "service",
+    "spec",
+    "srvd",
+    "store",
+    "tag",
+    "test",
+    "view",
 }
 
 NOISE_TERMS = {
@@ -163,11 +395,13 @@ LAYER_SUFFIXES = (
 )
 
 EXPLICIT_REFERENCE_KINDS = {
+    "abap-object",
     "endpoint",
     "import",
     "import-file",
     "mapper-contract",
     "namespace",
+    "sql-object",
     "type-reference",
 }
 
@@ -200,6 +434,7 @@ CROSS_ROOT_GENERIC_SIGNALS = {
 
 ROLE_RELATION_BONUSES = {
     frozenset(("frontend-api", "backend-controller")): 55,
+    frozenset(("frontend-view", "backend-controller")): 24,
     frozenset(("backend-controller", "backend-service")): 40,
     frozenset(("backend-service", "backend-mapper")): 40,
     frozenset(("backend-service", "backend-dto")): 24,
@@ -232,10 +467,11 @@ class IndexedFile:
     relative_path: str
     size: int
     modified_at: float
+    additional_source_suffixes: frozenset[str] = frozenset()
 
     @property
     def stem(self) -> str:
-        return self.path.stem
+        return _logical_stem(self.path, self.additional_source_suffixes)
 
 
 @dataclass(frozen=True)
@@ -283,19 +519,106 @@ def _log(callback: LogCallback | None, level: str, message: str) -> None:
         callback(level, message)
 
 
-def _is_allowed_file(path: Path) -> bool:
-    return _body_exclusion_reason(path) == ""
+def _normalize_additional_source_suffixes(value: Any) -> frozenset[str]:
+    """Validate user-configured text source suffixes without accepting paths or binaries."""
+
+    if value is None:
+        return frozenset()
+    raw_values = [value] if isinstance(value, str) else value
+    if not isinstance(raw_values, (list, tuple, set, frozenset)):
+        raise ValueError("scanner.additionalSourceSuffixes는 문자열 배열이어야 합니다.")
+
+    normalized: set[str] = set()
+    for raw in raw_values:
+        if not isinstance(raw, str) or not raw.strip():
+            raise ValueError(
+                "scanner.additionalSourceSuffixes에는 비어 있지 않은 확장자만 사용할 수 있습니다."
+            )
+        suffix = raw.strip().casefold()
+        if not suffix.startswith("."):
+            suffix = "." + suffix
+        if not re.fullmatch(r"\.[a-z0-9][a-z0-9_+-]{0,31}", suffix):
+            raise ValueError(
+                f"scanner.additionalSourceSuffixes에 안전하지 않은 확장자가 있습니다: {raw}"
+            )
+        if suffix in UNSAFE_ADDITIONAL_SOURCE_SUFFIXES:
+            raise ValueError(
+                f"scanner.additionalSourceSuffixes에 바이너리 또는 비밀정보 확장자를 사용할 수 없습니다: {raw}"
+            )
+        normalized.add(suffix)
+    return frozenset(normalized)
 
 
-def _body_exclusion_reason(path: Path) -> str:
+def _source_suffixes(additional_source_suffixes: Any = None) -> frozenset[str]:
+    return frozenset(ALLOWED_SUFFIXES) | _normalize_additional_source_suffixes(
+        additional_source_suffixes
+    )
+
+
+def _is_allowed_file(path: Path, additional_source_suffixes: Any = None) -> bool:
+    return _body_exclusion_reason(path, additional_source_suffixes) == ""
+
+
+def _logical_stem(path: Path, additional_source_suffixes: Any = None) -> str:
+    """Return the project identifier behind source and secondary role suffixes."""
+
+    name = path.name
+    lowered = name.casefold()
+    for suffix in sorted(
+        _source_suffixes(additional_source_suffixes),
+        key=len,
+        reverse=True,
+    ):
+        if lowered.endswith(suffix) and len(name) > len(suffix):
+            name = name[: -len(suffix)]
+            break
+    parts = name.split(".")
+    while len(parts) > 1 and parts[-1].casefold() in DOTTED_FILE_QUALIFIERS:
+        parts.pop()
+    return ".".join(parts) or path.stem
+
+
+def _is_sensitive_config_name(path: Path) -> bool:
     name = path.name.casefold()
-    if name.startswith(".env") or name in {".npmrc", ".pypirc", "settings.xml"}:
-        return "민감정보 파일 규칙"
-    if any(part in name for part in SENSITIVE_NAME_PARTS):
-        return "민감정보 파일 규칙"
+    if name.startswith(".env") or name in SENSITIVE_EXACT_NAMES:
+        return True
     if path.suffix.casefold() in {".key", ".pem", ".p12", ".pfx", ".jks"}:
+        return True
+    if path.suffix.casefold() not in SENSITIVE_CONFIG_SUFFIXES:
+        return False
+    tokens = {
+        token
+        for token in re.split(r"[^a-z0-9]+", path.stem.casefold())
+        if token
+    }
+    compact_stem = re.sub(r"[^a-z0-9]+", "", path.stem.casefold())
+    sensitive_compounds = {
+        "accesskey",
+        "accesstoken",
+        "apikey",
+        "authtoken",
+        "clientsecret",
+        "databasepassword",
+        "dbpassword",
+        "privatekey",
+    }
+    return bool(tokens & SENSITIVE_CONFIG_TOKENS) or any(
+        marker in compact_stem
+        for marker in SENSITIVE_CONFIG_TOKENS | sensitive_compounds
+    )
+
+
+def _body_exclusion_reason(path: Path, additional_source_suffixes: Any = None) -> str:
+    if _is_sensitive_config_name(path):
         return "민감정보 파일 규칙"
-    if path.suffix.casefold() in ALLOWED_SUFFIXES or name in ALLOWED_NAMES:
+    name = path.name.casefold()
+    if (
+        any(
+            name.endswith(suffix) and len(name) > len(suffix)
+            for suffix in _source_suffixes(additional_source_suffixes)
+        )
+        or name in ALLOWED_NAMES
+    ):
         return ""
     return "지원하지 않는 확장자"
 
@@ -379,8 +702,10 @@ def build_project_index(
     root: Path,
     max_files: int,
     log: LogCallback | None = None,
+    additional_source_suffixes: Any = None,
 ) -> tuple[list[IndexedFile], int, bool]:
     root = root.resolve()
+    source_suffixes = _normalize_additional_source_suffixes(additional_source_suffixes)
     indexed: list[IndexedFile] = []
     excluded = 0
     truncated = False
@@ -395,7 +720,7 @@ def build_project_index(
         )
         for name in sorted(file_names):
             path = current_path / name
-            if path.is_symlink() or not _is_allowed_file(path):
+            if path.is_symlink() or not _is_allowed_file(path, source_suffixes):
                 excluded += 1
                 continue
             relative = _safe_relative(root, path)
@@ -407,7 +732,16 @@ def build_project_index(
             except OSError:
                 excluded += 1
                 continue
-            indexed.append(IndexedFile(root, path, relative, stat.st_size, stat.st_mtime))
+            indexed.append(
+                IndexedFile(
+                    root,
+                    path,
+                    relative,
+                    stat.st_size,
+                    stat.st_mtime,
+                    source_suffixes,
+                )
+            )
             if len(indexed) >= max_files:
                 truncated = True
                 break
@@ -1395,6 +1729,9 @@ def collect_changes(
     request_text: str = "",
 ) -> tuple[list[ChangeItem], dict[str, list[IndexedFile]], int, bool]:
     _validate_date_range(date_from, date_to)
+    additional_source_suffixes = _normalize_additional_source_suffixes(
+        scanner_settings.get("additionalSourceSuffixes")
+    )
     all_changes: list[ChangeItem] = []
     git_scope_changes: list[ChangeItem] = []
     indexes: dict[str, list[IndexedFile]] = {}
@@ -1411,6 +1748,7 @@ def collect_changes(
             root,
             int(scanner_settings.get("maxCandidateFiles", 10000)),
             log,
+            additional_source_suffixes,
         )
         indexes[str(root)] = index
         excluded_total += excluded
@@ -1520,12 +1858,24 @@ def collect_changes(
 
 def _clean_reference(value: str) -> str:
     clean = value.strip().strip("'\"").replace("\\", "/")
+    had_path_separator = "/" in clean
     clean = clean.rsplit("/", 1)[-1]
-    clean = clean.rsplit(".", 1)[-1] if "." in clean and not clean.casefold().endswith(
-        tuple(ALLOWED_SUFFIXES)
-    ) else clean
-    clean = re.sub(r"\.(?:java|kt|kts|xml|tsx?|jsx?|vue|py|sql)$", "", clean, flags=re.IGNORECASE)
-    return re.sub(r"[^A-Za-z0-9_가-힣$#{}-]", "", clean)
+    lowered = clean.casefold()
+    removed_source_suffix = False
+    for suffix in sorted(ALLOWED_SUFFIXES, key=len, reverse=True):
+        if lowered.endswith(suffix) and len(clean) > len(suffix):
+            clean = clean[: -len(suffix)]
+            removed_source_suffix = True
+            break
+    if had_path_separator or removed_source_suffix:
+        parts = clean.split(".")
+        while len(parts) > 1 and parts[-1].casefold() in DOTTED_FILE_QUALIFIERS:
+            parts.pop()
+        clean = ".".join(parts)
+    elif "." in clean:
+        # Java, Python and mapper namespaces use dots as package separators.
+        clean = clean.rsplit(".", 1)[-1]
+    return re.sub(r"[^A-Za-z0-9_.가-힣$#{}-]", "", clean)
 
 
 def _normalize_endpoint(value: str) -> str:
@@ -1538,6 +1888,7 @@ def _normalize_endpoint(value: str) -> str:
         endpoint = endpoint[api_offset:]
     endpoint = re.split(r"[?#]", endpoint, maxsplit=1)[0]
     endpoint = re.sub(r"\{[^}/]+\}", "{}", endpoint)
+    endpoint = re.sub(r"<(?:[^:>/]+:)?[^>/]+>", "{}", endpoint)
     endpoint = re.sub(r":[A-Za-z_][A-Za-z0-9_-]*(?=/|$)", "{}", endpoint)
     endpoint = re.sub(r"/{2,}", "/", endpoint)
     if endpoint and not endpoint.startswith("/"):
@@ -1620,6 +1971,43 @@ def _extract_endpoint_values(path: Path, text: str) -> list[str]:
             )
         )
 
+    if suffix == ".py":
+        prefix_by_receiver: dict[str, str] = {}
+        for router_match in re.finditer(
+            r"(?ms)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
+            r"(?:APIRouter|Blueprint)\s*\(([^)]{0,1000})\)",
+            text,
+            re.IGNORECASE,
+        ):
+            prefix_match = re.search(
+                r"\b(?:prefix|url_prefix)\s*=\s*(['\"])(.{1,300}?)\1",
+                router_match.group(2),
+                re.IGNORECASE,
+            )
+            if prefix_match:
+                prefix_by_receiver[router_match.group(1).casefold()] = prefix_match.group(2)
+        for decorator_match in re.finditer(
+            r"(?m)^\s*@([A-Za-z_][A-Za-z0-9_.]*)"
+            r"\.(?:get|post|put|patch|delete|route)\s*\(\s*(['\"])(.{0,300}?)\2",
+            text,
+            re.IGNORECASE,
+        ):
+            receiver = decorator_match.group(1).rsplit(".", 1)[-1].casefold()
+            combined = _join_endpoint(
+                prefix_by_receiver.get(receiver, ""),
+                decorator_match.group(3),
+            )
+            if combined:
+                values.append(combined)
+        values.extend(
+            match.group(2)
+            for match in re.finditer(
+                r"\b(?:path|re_path)\s*\(\s*(['\"])(.{1,300}?)\1",
+                text,
+                re.IGNORECASE,
+            )
+        )
+
     if suffix in {".java", ".kt"}:
         annotation_pattern = re.compile(
             r"@(RequestMapping|GetMapping|PostMapping|PutMapping|PatchMapping|DeleteMapping)\b"
@@ -1668,6 +2056,8 @@ def _add_signal(
     weight: int,
 ) -> None:
     clean = _normalize_endpoint(value) if kind == "endpoint" else _clean_reference(value)
+    if kind == "sql-object" and clean.casefold() in SQL_OBJECT_NOISE:
+        return
     if len(clean) < 3 or clean.casefold() in NOISE_TERMS:
         return
     key = (clean.casefold(), kind)
@@ -1676,7 +2066,62 @@ def _add_signal(
         signals[key] = ReferenceSignal(clean, kind, weight)
 
 
-def _extract_reference_signals(path: Path, text: str) -> list[ReferenceSignal]:
+def _add_rust_use_path(
+    signals: dict[tuple[str, str], ReferenceSignal],
+    value: str,
+) -> None:
+    path = re.split(r"\s+as\s+", value.strip(), maxsplit=1)[0].strip()
+    parts = [part.strip() for part in path.split("::") if part.strip()]
+    if not parts:
+        return
+    if parts[-1] in {"*", "self"}:
+        parts.pop()
+    if not parts:
+        return
+    leaf = parts[-1]
+    leaf_kind = "import" if leaf[:1].isupper() else "import-file"
+    _add_signal(signals, leaf, leaf_kind, 110)
+    if len(parts) > 1 and parts[-2] not in {"crate", "self", "super"}:
+        _add_signal(signals, parts[-2], "import-file", 95)
+
+
+def _add_php_use_path(
+    signals: dict[tuple[str, str], ReferenceSignal],
+    value: str,
+) -> None:
+    path = re.split(r"\s+as\s+", value.strip(), maxsplit=1, flags=re.IGNORECASE)[
+        0
+    ].strip("\\ ")
+    parts = [part for part in path.split("\\") if part]
+    if not parts:
+        return
+    _add_signal(signals, parts[-1], "import", 110)
+    if len(parts) > 1:
+        _add_signal(signals, parts[-2], "import-file", 95)
+
+
+def _add_go_import(
+    signals: dict[tuple[str, str], ReferenceSignal],
+    module: str,
+    alias: str = "",
+) -> None:
+    normalized = module.strip().strip("/")
+    if not normalized:
+        return
+    _add_signal(signals, normalized, "import-file", 110)
+    parts = [part for part in normalized.split("/") if part]
+    if len(parts) > 1 and re.fullmatch(r"v[0-9]+", parts[-1], re.IGNORECASE):
+        _add_signal(signals, parts[-2], "import-file", 105)
+    clean_alias = alias.strip()
+    if clean_alias and clean_alias not in {".", "_"}:
+        _add_signal(signals, clean_alias, "import", 100)
+
+
+def _extract_reference_signals(
+    path: Path,
+    text: str,
+    additional_source_suffixes: Any = None,
+) -> list[ReferenceSignal]:
     """Extract bounded, typed references used to build a small dependency graph.
 
     Exact import and mapper contract references are intentionally stronger than
@@ -1685,7 +2130,12 @@ def _extract_reference_signals(path: Path, text: str) -> list[ReferenceSignal]:
     """
 
     signals: dict[tuple[str, str], ReferenceSignal] = {}
-    _add_signal(signals, path.stem, "file-stem", 120)
+    _add_signal(
+        signals,
+        _logical_stem(path, additional_source_suffixes),
+        "file-stem",
+        120,
+    )
     source = text[:120000]
 
     for endpoint in _extract_endpoint_values(path, source):
@@ -1722,6 +2172,183 @@ def _extract_reference_signals(path: Path, text: str) -> list[ReferenceSignal]:
     for modules in re.findall(r"(?m)^\s*import\s+([^\r\n#]+)", source):
         for module in modules.split(","):
             _add_signal(signals, module.split(" as ", 1)[0], "import-file", 95)
+
+    suffix = path.suffix.casefold()
+    if suffix == ".rs":
+        for use_value in re.findall(
+            r"(?m)^\s*(?:pub(?:\s*\([^)]*\))?\s+)?use\s+([^;]{1,1000});",
+            source,
+        ):
+            if "{" in use_value and "}" in use_value:
+                prefix, members = use_value.split("{", 1)
+                prefix = prefix.rstrip(": ")
+                if prefix:
+                    _add_rust_use_path(signals, prefix)
+                for member in members.rsplit("}", 1)[0].split(","):
+                    clean_member = member.strip()
+                    if clean_member:
+                        _add_rust_use_path(
+                            signals,
+                            f"{prefix}::{clean_member}" if prefix else clean_member,
+                        )
+            else:
+                _add_rust_use_path(signals, use_value)
+        for module in re.findall(
+            r"(?m)^\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+"
+            r"([A-Za-z_][A-Za-z0-9_]*)\s*;",
+            source,
+        ):
+            _add_signal(signals, module, "import-file", 115)
+
+    if suffix == ".php":
+        for use_value in re.findall(
+            r"(?mi)^\s*use\s+(?:(?:function|const)\s+)?([^;]{1,1000});",
+            source,
+        ):
+            if "{" in use_value and "}" in use_value:
+                prefix, members = use_value.split("{", 1)
+                prefix = prefix.rstrip("\\ ")
+                for member in members.rsplit("}", 1)[0].split(","):
+                    clean_member = member.strip()
+                    if clean_member:
+                        _add_php_use_path(
+                            signals,
+                            f"{prefix}\\{clean_member}" if prefix else clean_member,
+                        )
+            else:
+                for imported in use_value.split(","):
+                    _add_php_use_path(signals, imported)
+        for included in re.findall(
+            r"(?i)\b(?:include|include_once|require|require_once)\b\s*"
+            r"(?:\(\s*)?(?:__DIR__\s*\.\s*)?['\"]([^'\"]+)['\"]",
+            source,
+        ):
+            _add_signal(signals, included, "import-file", 115)
+
+    if suffix == ".rb":
+        for required in re.findall(
+            r"(?m)^\s*require(?:_relative)?\s*(?:\(\s*)?"
+            r"['\"]([^'\"]+)['\"]",
+            source,
+        ):
+            _add_signal(signals, required, "import-file", 115)
+
+    if suffix == ".go":
+        for alias, module in re.findall(
+            r"(?m)^\s*import\s+(?:(\.|_|[A-Za-z_][A-Za-z0-9_]*)\s+)?"
+            r"[\"`]([^\"`]+)[\"`]",
+            source,
+        ):
+            _add_go_import(signals, module, alias)
+        for import_block in re.findall(
+            r"(?ms)^\s*import\s*\((.{0,10000}?)^\s*\)",
+            source,
+        ):
+            for alias, module in re.findall(
+                r"(?m)^\s*(?:(\.|_|[A-Za-z_][A-Za-z0-9_]*)\s+)?"
+                r"[\"`]([^\"`]+)[\"`]",
+                import_block,
+            ):
+                _add_go_import(signals, module, alias)
+
+    if suffix == ".cs":
+        for imported in re.findall(
+            r"(?m)^\s*(?:global\s+)?using\s+(?:static\s+)?"
+            r"(?:(?:[A-Za-z_][A-Za-z0-9_]*)\s*=\s*)?"
+            r"([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+)\s*;",
+            source,
+        ):
+            _add_signal(signals, imported, "import", 110)
+
+    if path.suffix.casefold() in JSP_SOURCE_SUFFIXES:
+        for value in re.findall(
+            r"<%@\s*include\b[^%>]*\bfile\s*=\s*['\"]([^'\"]+)['\"]",
+            source,
+            re.IGNORECASE,
+        ):
+            _add_signal(signals, value, "import-file", 115)
+        for value in re.findall(
+            r"<(?:jsp:include|c:import)\b[^>]*\b(?:page|url)\s*=\s*['\"]([^'\"]+)['\"]",
+            source,
+            re.IGNORECASE,
+        ):
+            _add_signal(signals, value, "import-file", 110)
+        for imports in re.findall(
+            r"<%@\s*page\b[^%>]*\bimport\s*=\s*['\"]([^'\"]+)['\"]",
+            source,
+            re.IGNORECASE,
+        ):
+            for value in imports.split(","):
+                _add_signal(signals, value, "import", 105)
+
+    if suffix in SQL_SOURCE_SUFFIXES | ABAP_SOURCE_SUFFIXES:
+        sql_identifier_atom = (
+            r'(?:\[[^\]\r\n]{1,128}\]|"[^"]+"|'
+            r"[A-Za-z_][A-Za-z0-9_$#]*)"
+        )
+        sql_identifier = (
+            sql_identifier_atom
+            + r"(?:\."
+            + sql_identifier_atom
+            + r"){0,2}"
+        )
+        definition_pattern = (
+            r"\b(?:CREATE(?:\s+OR\s+REPLACE)?|ALTER|DROP)\s+"
+            r"(?:MATERIALIZED\s+)?"
+            r"(?:TABLE|VIEW|PROCEDURE|FUNCTION|PACKAGE(?:\s+BODY)?|"
+            r"TRIGGER|SEQUENCE|TYPE|SYNONYM)\s+"
+            r"(?:IF\s+(?:NOT\s+)?EXISTS\s+)?"
+            + f"({sql_identifier})"
+        )
+        for value in re.findall(definition_pattern, source, re.IGNORECASE):
+            _add_signal(signals, value, "sql-object", 110)
+        for value in re.findall(
+            r"\bDEFINE\s+(?:ROOT\s+)?VIEW(?:\s+ENTITY)?\s+"
+            + f"({sql_identifier})",
+            source,
+            re.IGNORECASE,
+        ):
+            _add_signal(signals, value, "sql-object", 110)
+        for value in re.findall(
+            r"\b(?:FROM|JOIN|UPDATE|INTO(?:\s+TABLE)?|MERGE\s+INTO|DELETE\s+FROM|"
+            r"REFERENCES|CALL)\s+"
+            + f"({sql_identifier})",
+            source,
+            re.IGNORECASE,
+        ):
+            _add_signal(signals, value, "sql-object", 85)
+
+    if suffix in ABAP_SOURCE_SUFFIXES:
+        abap_patterns = (
+            r"\bCALL\s+FUNCTION\s+['\"]?([A-Za-z_/][A-Za-z0-9_/]*)",
+            r"\bCALL\s+METHOD\s+([A-Za-z_/][A-Za-z0-9_/]*)\s*=>",
+            r"\b(?:SUBMIT|INCLUDE)\s+([A-Za-z_/][A-Za-z0-9_/]*)",
+            r"\bPERFORM\b[^\r\n.]{0,300}?\bIN\s+PROGRAM\s+([A-Za-z_/][A-Za-z0-9_/]*)",
+            r"\b(?:TYPE\s+REF\s+TO|INHERITING\s+FROM|NEW)\s+"
+            r"([A-Za-z_/][A-Za-z0-9_/]*)",
+            r"\bASSOCIATION\b[^\r\n{]{0,300}?\bTO\s+"
+            r"([A-Za-z_/][A-Za-z0-9_/]*)",
+        )
+        for pattern in abap_patterns:
+            for value in re.findall(pattern, source, re.IGNORECASE):
+                # abapGit encodes namespace slashes as '#', while other
+                # exports place the namespace in directories. Keep both the
+                # encoded full name and leaf object as exact candidates.
+                if "/" in value:
+                    _add_signal(
+                        signals,
+                        value.replace("/", "#"),
+                        "abap-object",
+                        115,
+                    )
+                    _add_signal(
+                        signals,
+                        value.rstrip("/").rsplit("/", 1)[-1],
+                        "abap-object",
+                        110,
+                    )
+                else:
+                    _add_signal(signals, value, "abap-object", 115)
 
     for attribute, value in re.findall(
         r"\b(namespace|resultType|parameterType|resultMap|ofType|javaType|refid)\s*=\s*['\"]([^'\"]+)['\"]",
@@ -1762,10 +2389,18 @@ def _extract_reference_signals(path: Path, text: str) -> list[ReferenceSignal]:
     return ranked[:120]
 
 
-def _extract_terms(path: Path, text: str) -> list[str]:
+def _extract_terms(
+    path: Path,
+    text: str,
+    additional_source_suffixes: Any = None,
+) -> list[str]:
     seen: set[str] = set()
     values: list[str] = []
-    for signal in _extract_reference_signals(path, text):
+    for signal in _extract_reference_signals(
+        path,
+        text,
+        additional_source_suffixes,
+    ):
         key = signal.value.casefold()
         if key not in seen:
             seen.add(key)
@@ -1792,6 +2427,28 @@ def _file_role(path: Path) -> str:
     path_key = f"/{relative}"
     backend_suffixes = {".java", ".kt", ".cs"}
     frontend_suffixes = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".vue"}
+    python_suffixes = {".py"}
+
+    if suffix in python_suffixes and (
+        re.search(r"(?:controller|router|routes|views?)\.py$", name)
+        or re.search(r"/(?:api|apis|controller|controllers|router|routers|views?)/", path_key)
+    ):
+        return "backend-controller"
+    if suffix in python_suffixes and (
+        re.search(r"(?:service|usecase)\.py$", name)
+        or re.search(r"/(?:service|services|usecase|usecases)/", path_key)
+    ):
+        return "backend-service"
+    if suffix in python_suffixes and (
+        re.search(r"(?:mapper|repository|dao)\.py$", name)
+        or re.search(r"/(?:mapper|mappers|repository|repositories|dao)/", path_key)
+    ):
+        return "backend-mapper"
+    if suffix in python_suffixes and (
+        re.search(r"(?:dto|vo|entity|model|schema|request|response)\.py$", name)
+        or re.search(r"/(?:dto|domain|entity|entities|model|models|schema|schemas|vo)/", path_key)
+    ):
+        return "backend-dto"
 
     if suffix in backend_suffixes and (
         re.search(r"(?:controller|resource)\.(?:java|kt|cs)$", name)
@@ -1806,7 +2463,8 @@ def _file_role(path: Path) -> str:
     if (
         re.search(r"(?:mapper|repository|dao)\.(?:java|kt|xml|cs)$", name)
         or re.search(r"/(?:mapper|mappers|repository|repositories|dao)/", path_key)
-        or suffix == ".sql"
+        or suffix in SQL_SOURCE_SUFFIXES
+        or suffix in {".asddls", ".cds", ".dcls", ".ddls"}
     ):
         return "backend-mapper"
     if suffix in backend_suffixes and (
@@ -1816,6 +2474,12 @@ def _file_role(path: Path) -> str:
         return "backend-dto"
     if re.search(r"(?:job|step|tasklet|decider)\.(?:java|kt|py)$", name):
         return "backend-batch"
+    if suffix == ".abap" and re.search(
+        r"\.(?:clas|func|fugr|intf|prog)\.abap$", name
+    ):
+        return "backend-service"
+    if suffix in {".bdef", ".srvd"}:
+        return "backend-controller"
 
     if suffix in frontend_suffixes and (
         re.search(r"/(?:api|apis|client|clients)/", path_key)
@@ -1839,9 +2503,37 @@ def _file_role(path: Path) -> str:
         return "frontend-provider"
     if suffix in frontend_suffixes and re.search(r"/(?:pages|routes|router)/", path_key):
         return "frontend-page"
-    if suffix in {".yml", ".yaml", ".properties", ".json"}:
+    if suffix in {
+        ".cfg",
+        ".conf",
+        ".csproj",
+        ".fsproj",
+        ".ini",
+        ".json",
+        ".properties",
+        ".sln",
+        ".tf",
+        ".toml",
+        ".vbproj",
+        ".yaml",
+        ".yml",
+    }:
         return "configuration"
-    if suffix in {".tsx", ".jsx", ".vue", ".html"}:
+    if suffix in (
+        {
+            ".tsx",
+            ".jsx",
+            ".vue",
+            ".html",
+            ".cshtml",
+            ".razor",
+            ".ftl",
+            ".vm",
+            ".mustache",
+            ".hbs",
+        }
+        | JSP_SOURCE_SUFFIXES
+    ):
         return "frontend-view"
     if re.search(r"(?:service|serviceimpl|usecase)\.(?:py|tsx?)$", name):
         return "business"
@@ -1853,7 +2545,7 @@ def _file_role(path: Path) -> str:
 
 
 def _business_family(path: Path) -> str:
-    stem = re.sub(r"[^A-Za-z0-9가-힣]", "", path.stem).casefold()
+    stem = re.sub(r"[^A-Za-z0-9가-힣]", "", _logical_stem(path)).casefold()
     for suffix in LAYER_SUFFIXES:
         if stem.endswith(suffix) and len(stem) > len(suffix) + 1:
             stem = stem[: -len(suffix)]
@@ -2165,8 +2857,23 @@ def _candidate_relation(
         focus_terms.append(signal.value)
 
     if candidate_signals is None:
-        candidate_signals = _extract_reference_signals(candidate.path, candidate_text) if candidate_text else []
-    changed_stem = profile.path.stem.casefold()
+        candidate_signals = (
+            _extract_reference_signals(
+                candidate.path,
+                candidate_text,
+                candidate.additional_source_suffixes,
+            )
+            if candidate_text
+            else []
+        )
+    changed_stem = next(
+        (
+            signal.value.casefold()
+            for signal in profile.signals
+            if signal.kind == "file-stem"
+        ),
+        _logical_stem(profile.path).casefold(),
+    )
     reverse_hits = [
         signal
         for signal in candidate_signals
@@ -2177,7 +2884,7 @@ def _candidate_relation(
         score += min(115, best.weight)
         explicit = True
         reasons.append(f"후보 파일이 변경 파일을 {best.kind}로 참조")
-        focus_terms.append(profile.path.stem)
+        focus_terms.append(_logical_stem(profile.path))
 
     changed_by_value: dict[str, list[ReferenceSignal]] = {}
     for signal in profile.signals:
@@ -2192,8 +2899,17 @@ def _candidate_relation(
                 reasons.append(f"공통 endpoint: {signal.value}")
                 focus_terms.append(signal.value)
                 break
-            if signal.kind in {"data-object", "statement-id", "data-field", "mapper-contract"} or changed_signal.kind in {
+            if signal.kind in {
+                "abap-object",
                 "data-object",
+                "sql-object",
+                "statement-id",
+                "data-field",
+                "mapper-contract",
+            } or changed_signal.kind in {
+                "abap-object",
+                "data-object",
+                "sql-object",
                 "statement-id",
                 "data-field",
                 "mapper-contract",
@@ -2202,6 +2918,7 @@ def _candidate_relation(
                 break
     for weight, value, kind in sorted(shared, reverse=True)[:3]:
         score += max(12, weight // 2)
+        explicit = explicit or kind in EXPLICIT_REFERENCE_KINDS
         reasons.append(f"공통 {kind}: {value}")
         focus_terms.append(value)
 
@@ -2360,6 +3077,9 @@ def build_scan_bundle(
     request_text: str = "",
 ) -> ScanBundle:
     _validate_date_range(date_from, date_to)
+    additional_source_suffixes = _normalize_additional_source_suffixes(
+        scanner_settings.get("additionalSourceSuffixes")
+    )
     change_notes = [redact_sensitive_text(note) for note in parse_manual_notes(manual_text)]
     focus_terms = _focus_terms("\n".join((request_text, *change_notes)))
     changes, indexes, excluded, truncated = collect_changes(
@@ -2407,7 +3127,11 @@ def build_scan_bundle(
         root = Path(change.root)
         path = root / change.path
         source = ""
-        if change.exists and path.exists() and _is_allowed_file(path):
+        if (
+            change.exists
+            and path.exists()
+            and _is_allowed_file(path, additional_source_suffixes)
+        ):
             try:
                 source = _read_text(path, max_source_scan_chars)
                 if path.stat().st_size > max_source_scan_chars or len(source) >= max_source_scan_chars:
@@ -2415,9 +3139,27 @@ def build_scan_bundle(
             except OSError as exc:
                 warnings.append(f"{change.path} 읽기 실패: {exc}")
         elif change.exists and path.exists():
-            warnings.append(f"{change.path}는 {_body_exclusion_reason(path)}으로 본문을 제외했습니다.")
-        signals = _extract_reference_signals(path, source)
-        terms = list(dict.fromkeys([*focus_terms, *_extract_terms(path, source)]))[:120]
+            warnings.append(
+                f"{change.path}는 "
+                f"{_body_exclusion_reason(path, additional_source_suffixes)}으로 본문을 제외했습니다."
+            )
+        signals = _extract_reference_signals(
+            path,
+            source,
+            additional_source_suffixes,
+        )
+        terms = list(
+            dict.fromkeys(
+                [
+                    *focus_terms,
+                    *_extract_terms(
+                        path,
+                        source,
+                        additional_source_suffixes,
+                    ),
+                ]
+            )
+        )[:120]
         profiles.append(
             ChangedProfile(
                 change=change,
@@ -2549,7 +3291,15 @@ def build_scan_bundle(
                 candidate_content_by_key[key] = content
                 if not path_score_possible:
                     content_scans += 1
-            candidate_signals = _extract_reference_signals(candidate.path, content) if content else []
+            candidate_signals = (
+                _extract_reference_signals(
+                    candidate.path,
+                    content,
+                    candidate.additional_source_suffixes,
+                )
+                if content
+                else []
+            )
             candidate_signals_by_key[key] = candidate_signals
             for signal in candidate_signals:
                 if signal.kind in EXPLICIT_REFERENCE_KINDS:
@@ -2628,8 +3378,16 @@ def build_scan_bundle(
             path=seed.candidate.path,
             role=seed.candidate_role,
             family=_business_family(Path(seed.candidate.relative_path)),
-            signals=_extract_reference_signals(seed.candidate.path, seed_content),
-            terms=_extract_terms(seed.candidate.path, seed_content),
+            signals=_extract_reference_signals(
+                seed.candidate.path,
+                seed_content,
+                seed.candidate.additional_source_suffixes,
+            ),
+            terms=_extract_terms(
+                seed.candidate.path,
+                seed_content,
+                seed.candidate.additional_source_suffixes,
+            ),
         )
         if not bridge_profile.signals:
             continue
