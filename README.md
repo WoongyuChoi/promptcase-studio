@@ -6,15 +6,15 @@
 ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)
 ![PyQt5](https://img.shields.io/badge/UI-PyQt5-41CD52?logo=qt&logoColor=white)
 ![AI](https://img.shields.io/badge/AI-Gemini%20%7C%20Qwen-7C3AED)
-![문서](https://img.shields.io/badge/Output-Excel%20%7C%20Release%20Note-217346)
-![버전](https://img.shields.io/badge/Version-3.4.1-F97316)
+![버전](https://img.shields.io/github/v/release/WoongyuChoi/promptcase-studio)
 
-[주요 기능](#주요-기능) · [사용자 실행](#사용자-실행) · [동작 방식](#동작-방식) ·
-[개발 환경](#개발-환경-실행) · [릴리즈](#패키지-빌드와-릴리즈) · [문서](#관련-문서)
-
-Promptcase Studio는 프로젝트 전체를 무작정 AI에 보내지 않습니다. Git 변경 이력, 현재 diff,
+> Promptcase Studio는 프로젝트 전체를 무작정 AI에 보내지 않습니다. Git 변경 이력, 현재 diff,
 사용자 의뢰와 실제 소스의 참조 관계를 조합해 필요한 근거를 선별하고, AI 응답을 로컬 계약과
 품질 규칙으로 검증한 뒤 기존 Excel 템플릿의 서식을 보존해 결과를 생성합니다.
+
+<figure align="center">
+  <img src="https://github.com/user-attachments/assets/038285aa-174b-4bdf-bc44-99c0fedc362c" alt="Promptcase Studio UI" width="80%" />
+</figure>
 
 ## 주요 기능
 
