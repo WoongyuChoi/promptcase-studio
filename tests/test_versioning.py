@@ -17,13 +17,18 @@ class VersioningTests(unittest.TestCase):
             )
         )
         readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
-        readme_version = re.search(
+        static_readme_version = re.search(
             r"img\.shields\.io/badge/Version-(\d+\.\d+\.\d+)-", readme
+        )
+        dynamic_readme_version = re.search(
+            r"img\.shields\.io/github/v/release/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",
+            readme,
         )
 
         self.assertEqual(manifest["bundleVersion"], __version__)
-        self.assertIsNotNone(readme_version)
-        self.assertEqual(readme_version.group(1), __version__)
+        self.assertTrue(static_readme_version or dynamic_readme_version)
+        if static_readme_version:
+            self.assertEqual(static_readme_version.group(1), __version__)
 
     def test_response_schema_id_matches_manifest_policy_version(self):
         manifest = json.loads(
@@ -148,7 +153,8 @@ class VersioningTests(unittest.TestCase):
         )
 
         self.assertIn("README_FILE", script)
-        self.assertIn("README_VERSION_BADGE", script)
+        self.assertIn("README_STATIC_VERSION_BADGE", script)
+        self.assertIn("README_DYNAMIC_VERSION_BADGE", script)
         self.assertIn("read_readme_version()", script)
 
 

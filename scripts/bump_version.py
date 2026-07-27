@@ -12,8 +12,11 @@ PROMPT_MANIFEST = ROOT / "prompts" / "manifest.json"
 README_FILE = ROOT / "README.md"
 SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
 VERSION_DECLARATION = re.compile(r'^__version__\s*=\s*"(\d+\.\d+\.\d+)"', re.M)
-README_VERSION_BADGE = re.compile(
+README_STATIC_VERSION_BADGE = re.compile(
     r"(https://img\.shields\.io/badge/Version-)(\d+\.\d+\.\d+)(-[A-Za-z0-9]+)"
+)
+README_DYNAMIC_VERSION_BADGE = re.compile(
+    r"https://img\.shields\.io/github/v/release/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
 )
 
 
@@ -24,11 +27,14 @@ def read_product_version() -> str:
     return match.group(1)
 
 
-def read_readme_version() -> str:
-    match = README_VERSION_BADGE.search(README_FILE.read_text(encoding="utf-8"))
-    if not match:
-        raise SystemExit(f"README 버전 배지를 찾을 수 없습니다: {README_FILE}")
-    return match.group(2)
+def read_readme_version() -> str | None:
+    readme = README_FILE.read_text(encoding="utf-8")
+    match = README_STATIC_VERSION_BADGE.search(readme)
+    if match:
+        return match.group(2)
+    if README_DYNAMIC_VERSION_BADGE.search(readme):
+        return None
+    raise SystemExit(f"README 버전 배지를 찾을 수 없습니다: {README_FILE}")
 
 
 def next_version(current: str, target: str) -> str:
@@ -49,10 +55,14 @@ def verify_versions() -> str:
     manifest = json.loads(PROMPT_MANIFEST.read_text(encoding="utf-8-sig"))
     prompt_version = str(manifest.get("bundleVersion", ""))
     readme_version = read_readme_version()
-    if len({product_version, prompt_version, readme_version}) != 1:
+    compared_versions = {product_version, prompt_version}
+    if readme_version is not None:
+        compared_versions.add(readme_version)
+    if len(compared_versions) != 1:
         raise SystemExit(
             "버전이 일치하지 않습니다: "
-            f"제품={product_version}, 프롬프트={prompt_version}, README={readme_version}"
+            f"제품={product_version}, 프롬프트={prompt_version}, "
+            f"README={readme_version or 'GitHub release tag'}"
         )
     if not SEMVER_PATTERN.fullmatch(product_version):
         raise SystemExit(f"유효한 SemVer가 아닙니다: {product_version}")
@@ -79,14 +89,15 @@ def update_versions(target: str) -> tuple[str, str]:
         encoding="utf-8",
     )
     readme = README_FILE.read_text(encoding="utf-8")
-    README_FILE.write_text(
-        README_VERSION_BADGE.sub(
-            lambda match: f"{match.group(1)}{updated}{match.group(3)}",
-            readme,
-            count=1,
-        ),
-        encoding="utf-8",
-    )
+    if README_STATIC_VERSION_BADGE.search(readme):
+        README_FILE.write_text(
+            README_STATIC_VERSION_BADGE.sub(
+                lambda match: f"{match.group(1)}{updated}{match.group(3)}",
+                readme,
+                count=1,
+            ),
+            encoding="utf-8",
+        )
     return current, updated
 
 

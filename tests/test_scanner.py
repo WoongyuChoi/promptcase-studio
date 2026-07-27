@@ -1090,9 +1090,13 @@ GITHUB_TOKEN=github-token-value
 privateKey: private-key-value
 DATABASE_URL=postgres://sample:secret@localhost/app
 Authorization: Bearer abcdefghijklmnopqrstuvwxyz
-<password>super-secret-password</password>'''
+<password>super-secret-password</password>
+-----BEGIN PRIVATE KEY-----
+private-key-block-value
+-----END PRIVATE KEY-----'''
         redacted = _redact_sensitive_text(source)
         self.assertEqual(redacted.count("[REDACTED]"), 11)
+        self.assertIn("[REDACTED PRIVATE KEY]", redacted)
         self.assertNotIn("replace-with-a-real-value-123", redacted)
         self.assertNotIn("gemini-prefixed-secret-value", redacted)
         self.assertNotIn("openai-prefixed-secret-value", redacted)
@@ -1104,6 +1108,18 @@ Authorization: Bearer abcdefghijklmnopqrstuvwxyz
         self.assertNotIn("postgres://sample:secret@localhost/app", redacted)
         self.assertNotIn("abcdefghijklmnopqrstuvwxyz", redacted)
         self.assertNotIn("super-secret-password", redacted)
+        self.assertNotIn("private-key-block-value", redacted)
+
+        truncated_pem = _redact_sensitive_text(
+            "-----BEGIN PRIVATE KEY-----\ntruncated-private-material"
+        )
+        truncated_xml = _redact_sensitive_text(
+            "<password>truncated-password-value"
+        )
+        self.assertNotIn("truncated-private-material", truncated_pem)
+        self.assertIn("[REDACTED PRIVATE KEY]", truncated_pem)
+        self.assertNotIn("truncated-password-value", truncated_xml)
+        self.assertEqual(truncated_xml, "<password>[REDACTED]")
 
     def test_bounded_text_reader_does_not_load_the_entire_file(self):
         class TrackingBytesIO(BytesIO):
@@ -1219,18 +1235,26 @@ Authorization: Bearer abcdefghijklmnopqrstuvwxyz
             date(2026, 7, 20),
             date(2026, 7, 23),
             True,
-            {"maxCandidateFiles": 100},
+            {"maxCandidateFiles": 100, "scopeRecoveryEnabled": False},
             request_text="넓은 시스템 기반 변경 요청",
         )
 
         collect_date.assert_not_called()
         self.assertEqual([item.path for item in changes], ["src/service/UserService.java"])
 
+    @patch("promptcase_studio.scanner._run_git_limited")
     @patch("promptcase_studio.scanner._run_git")
-    def test_git_diff_combines_committed_and_working_changes_from_date_base(self, run_git):
+    def test_git_diff_combines_committed_and_working_changes_from_date_base(
+        self,
+        run_git,
+        run_git_limited,
+    ):
         def fake_git(_root, args):
             if args[:2] == ["rev-list", "-1"]:
                 return "base-commit\n"
+            raise AssertionError(args)
+
+        def fake_git_limited(_root, args, _maximum):
             if args[:6] == [
                 "diff",
                 "--find-renames",
@@ -1239,10 +1263,14 @@ Authorization: Bearer abcdefghijklmnopqrstuvwxyz
                 "base-commit",
                 "--",
             ]:
-                return "@@ -1 +1 @@\n-old committed value\n+new working value\n"
+                return (
+                    "@@ -1 +1 @@\n-old committed value\n+new working value\n",
+                    False,
+                )
             raise AssertionError(args)
 
         run_git.side_effect = fake_git
+        run_git_limited.side_effect = fake_git_limited
         diff = _git_diff(
             FIXTURE_ROOT.resolve(),
             "src/service/UserService.java",
@@ -1251,20 +1279,30 @@ Authorization: Bearer abcdefghijklmnopqrstuvwxyz
         )
         self.assertIn("old committed value", diff)
         self.assertIn("new working value", diff)
-        self.assertEqual(run_git.call_count, 2)
+        self.assertEqual(run_git.call_count, 1)
+        self.assertEqual(run_git_limited.call_count, 1)
 
+    @patch("promptcase_studio.scanner._run_git_limited")
     @patch("promptcase_studio.scanner._run_git")
-    def test_git_diff_uses_empty_tree_when_repository_started_after_date(self, run_git):
+    def test_git_diff_uses_empty_tree_when_repository_started_after_date(
+        self,
+        run_git,
+        run_git_limited,
+    ):
         def fake_git(_root, args):
             if args[:2] == ["rev-list", "-1"]:
                 return ""
             if args == ["rev-parse", "--verify", "HEAD"]:
                 return "first-commit\n"
+            raise AssertionError(args)
+
+        def fake_git_limited(_root, args, _maximum):
             if args[0] == "diff" and "4b825dc642cb6eb9a060e54bf8d69288fbee4904" in args:
-                return "@@ -0,0 +1 @@\n+initial content\n"
+                return "@@ -0,0 +1 @@\n+initial content\n", False
             raise AssertionError(args)
 
         run_git.side_effect = fake_git
+        run_git_limited.side_effect = fake_git_limited
         diff = _git_diff(
             FIXTURE_ROOT.resolve(),
             "README.md",
@@ -1272,7 +1310,8 @@ Authorization: Bearer abcdefghijklmnopqrstuvwxyz
             date.today(),
         )
         self.assertIn("initial content", diff)
-        self.assertEqual(run_git.call_count, 3)
+        self.assertEqual(run_git.call_count, 2)
+        self.assertEqual(run_git_limited.call_count, 1)
 
     def test_modified_date_range_includes_both_boundary_dates(self):
         root = FIXTURE_ROOT.resolve()
@@ -1325,8 +1364,13 @@ Authorization: Bearer abcdefghijklmnopqrstuvwxyz
         self.assertIn(f"--until={date_to.isoformat()}T23:59:59", log_args)
         self.assertEqual(changes[0].path, "src/service/UserService.java")
 
+    @patch("promptcase_studio.scanner._run_git_limited")
     @patch("promptcase_studio.scanner._run_git")
-    def test_historical_git_diff_stops_at_selected_end_date(self, run_git):
+    def test_historical_git_diff_stops_at_selected_end_date(
+        self,
+        run_git,
+        run_git_limited,
+    ):
         date_to = date.today() - timedelta(days=2)
         date_from = date_to - timedelta(days=2)
         next_midnight = (date_to + timedelta(days=1)).isoformat()
@@ -1337,11 +1381,15 @@ Authorization: Bearer abcdefghijklmnopqrstuvwxyz
                     return "base-commit\n"
                 if f"--before={next_midnight}T00:00:00" in args:
                     return "end-commit\n"
+            raise AssertionError(args)
+
+        def fake_git_limited(_root, args, _maximum):
             if args[0] == "diff" and "base-commit" in args and "end-commit" in args:
-                return "@@ -1 +1 @@\n-old range value\n+new range value\n"
+                return "@@ -1 +1 @@\n-old range value\n+new range value\n", False
             raise AssertionError(args)
 
         run_git.side_effect = fake_git
+        run_git_limited.side_effect = fake_git_limited
         diff = _git_diff(
             FIXTURE_ROOT.resolve(),
             "src/service/UserService.java",
@@ -1350,7 +1398,8 @@ Authorization: Bearer abcdefghijklmnopqrstuvwxyz
         )
 
         self.assertIn("new range value", diff)
-        self.assertEqual(run_git.call_count, 3)
+        self.assertEqual(run_git.call_count, 2)
+        self.assertEqual(run_git_limited.call_count, 1)
 
 
 if __name__ == "__main__":

@@ -282,6 +282,7 @@ DOTTED_FILE_QUALIFIERS = {
     "bdef",
     "clas",
     "client",
+    "com",
     "component",
     "controller",
     "dao",
@@ -432,6 +433,65 @@ CROSS_ROOT_GENERIC_SIGNALS = {
     "utils",
 }
 
+SCOPE_RECOVERY_GENERIC_TOKENS = CROSS_ROOT_GENERIC_SIGNALS | {
+    "backend",
+    "client",
+    "com",
+    "controller",
+    "controllers",
+    "dao",
+    "dto",
+    "frontend",
+    "impl",
+    "implementation",
+    "example",
+    "java",
+    "javascript",
+    "kotlin",
+    "mapper",
+    "mappers",
+    "model",
+    "models",
+    "page",
+    "pages",
+    "python",
+    "net",
+    "org",
+    "repository",
+    "repositories",
+    "route",
+    "routes",
+    "schema",
+    "schemas",
+    "server",
+    "serviceimpl",
+    "src",
+    "tsx",
+    "typescript",
+    "view",
+    "views",
+    "vo",
+}
+
+SCOPE_RECOVERY_LOW_VALUE_TERMS = {
+    "audit",
+    "chore",
+    "cleanup",
+    "comment",
+    "comments",
+    "docs",
+    "documentation",
+    "format",
+    "formatting",
+    "label",
+    "lint",
+    "log",
+    "logging",
+    "style",
+    "typo",
+    "whitespace",
+}
+
 ROLE_RELATION_BONUSES = {
     frozenset(("frontend-api", "backend-controller")): 55,
     frozenset(("frontend-view", "backend-controller")): 24,
@@ -456,7 +516,12 @@ SENSITIVE_ASSIGNMENT = re.compile(
 )
 BEARER_VALUE = re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/-]{12,}")
 SENSITIVE_XML_VALUE = re.compile(
-    r"(?is)(<(?:password|apiKey|accessToken|clientSecret)>)[^<]{8,}(</(?:password|apiKey|accessToken|clientSecret)>)"
+    r"(?is)(<(?:password|apiKey|accessToken|clientSecret)>)[^<]{8,}"
+    r"((?:</(?:password|apiKey|accessToken|clientSecret)>)|\Z)"
+)
+PRIVATE_KEY_BLOCK = re.compile(
+    r"(?is)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?"
+    r"(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\Z)"
 )
 
 
@@ -608,6 +673,19 @@ def _is_sensitive_config_name(path: Path) -> bool:
     )
 
 
+def _change_touches_sensitive_path(change: ChangeItem) -> bool:
+    paths = [Path(change.path)]
+    paths.extend(
+        Path(match.group(1).strip())
+        for match in re.finditer(
+            r"(?:이전 경로|이동된 경로)\s*:\s*([^;]+)",
+            change.note,
+        )
+        if match.group(1).strip()
+    )
+    return any(_is_sensitive_config_name(path) for path in paths)
+
+
 def _body_exclusion_reason(path: Path, additional_source_suffixes: Any = None) -> str:
     if _is_sensitive_config_name(path):
         return "민감정보 파일 규칙"
@@ -658,10 +736,7 @@ def _xml_declared_encoding(data: bytes) -> str:
         return ""
 
 
-def _read_text(path: Path, max_chars: int = 0) -> str:
-    with path.open("rb") as handle:
-        data = handle.read(max_chars * 4 if max_chars > 0 else -1)
-
+def _decode_text_bytes(data: bytes, max_chars: int = 0) -> str:
     encodings: list[str] = []
     if data.startswith(codecs.BOM_UTF8):
         encodings.append("utf-8-sig")
@@ -683,13 +758,20 @@ def _read_text(path: Path, max_chars: int = 0) -> str:
     return _redact_sensitive_text(data.decode("utf-8", errors="replace"))[:max_chars or None]
 
 
+def _read_text(path: Path, max_chars: int = 0) -> str:
+    with path.open("rb") as handle:
+        data = handle.read(max_chars * 4 if max_chars > 0 else -1)
+    return _decode_text_bytes(data, max_chars)
+
+
 def _redact_sensitive_text(text: str) -> str:
     def redact_assignment(match: re.Match[str]) -> str:
         return f"{match.group(1)}{match.group(2)}[REDACTED]{match.group(4)}"
 
     redacted = SENSITIVE_ASSIGNMENT.sub(redact_assignment, text)
     redacted = BEARER_VALUE.sub(r"\1[REDACTED]", redacted)
-    return SENSITIVE_XML_VALUE.sub(r"\1[REDACTED]\2", redacted)
+    redacted = SENSITIVE_XML_VALUE.sub(r"\1[REDACTED]\2", redacted)
+    return PRIVATE_KEY_BLOCK.sub("[REDACTED PRIVATE KEY]", redacted)
 
 
 def redact_sensitive_text(text: str) -> str:
@@ -765,11 +847,160 @@ def _run_git(root: Path, args: list[str]) -> str:
     return completed.stdout
 
 
+def _run_git_bytes(root: Path, args: list[str]) -> bytes:
+    completed = subprocess.run(
+        ["git", "-C", str(root), *args],
+        check=True,
+        capture_output=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return completed.stdout
+
+
+def _run_git_limited(
+    root: Path,
+    args: list[str],
+    maximum_chars: int,
+) -> tuple[str, bool]:
+    """Run Git without retaining an unbounded diff/blob in process memory."""
+
+    maximum_chars = max(1, maximum_chars)
+    maximum_bytes = max(4096, maximum_chars * 4)
+    command = ["git", "-C", str(root), *args]
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if process.stdout is None:
+        process.kill()
+        raise OSError("Git stdout pipe를 열 수 없습니다.")
+    data = b""
+    byte_truncated = False
+    try:
+        data = process.stdout.read(maximum_bytes + 1)
+        byte_truncated = len(data) > maximum_bytes
+        if byte_truncated and process.poll() is None:
+            process.terminate()
+        try:
+            return_code = process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            return_code = process.wait()
+    finally:
+        process.stdout.close()
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+    if return_code and not byte_truncated:
+        raise subprocess.CalledProcessError(
+            return_code,
+            command,
+        )
+    text = _decode_text_bytes(data[:maximum_bytes])
+    text_truncated = len(text) > maximum_chars
+    return text[:maximum_chars], byte_truncated or text_truncated
+
+
 def is_git_repository(root: Path) -> bool:
     try:
         return _run_git(root, ["rev-parse", "--is-inside-work-tree"]).strip() == "true"
     except (OSError, subprocess.CalledProcessError):
         return False
+
+
+def _git_first_parent_or_empty_tree(root: Path, commit: str) -> str:
+    parents = _run_git(
+        root,
+        ["rev-list", "--parents", "-n", "1", commit],
+    ).strip().split()
+    if not parents or parents[0].casefold() != commit.casefold():
+        raise subprocess.CalledProcessError(1, ["git", "rev-list", commit])
+    return parents[1] if len(parents) > 1 else EMPTY_GIT_TREE
+
+
+def _git_descendant_snapshot_commit(root: Path, commits: list[str]) -> str:
+    """Return the one commit that descends from every other selected commit."""
+
+    unique = list(dict.fromkeys(commits))
+    if len(unique) == 1:
+        return unique[0]
+    descendants: list[str] = []
+    for candidate in unique:
+        is_descendant = True
+        for other in unique:
+            if candidate == other:
+                continue
+            completed = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "merge-base",
+                    "--is-ancestor",
+                    other,
+                    candidate,
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if completed.returncode != 0:
+                is_descendant = False
+                break
+        if is_descendant:
+            descendants.append(candidate)
+    return descendants[0] if len(descendants) == 1 else ""
+
+
+def _git_file_snapshot(
+    root: Path,
+    commits: str,
+    relative_path: str,
+    max_chars: int,
+    *,
+    prefer_first: bool = False,
+) -> str:
+    commit_values = [value.strip() for value in commits.split(",") if value.strip()]
+    if not commit_values:
+        return ""
+    try:
+        git_root = Path(_run_git(root, ["rev-parse", "--show-toplevel"]).strip()).resolve()
+        full_path = (root / relative_path).resolve(strict=False)
+        git_relative = full_path.relative_to(git_root).as_posix()
+        snapshot_commit = (
+            commit_values[0]
+            if prefer_first
+            else _git_descendant_snapshot_commit(git_root, commit_values)
+        )
+        if not snapshot_commit:
+            return ""
+        object_spec = f"{snapshot_commit}:{git_relative}"
+        maximum_bytes = max_chars * 4 if max_chars > 0 else 0
+        blob_size = int(
+            _run_git(
+                git_root,
+                ["cat-file", "-s", object_spec],
+            ).strip()
+        )
+        if maximum_bytes and blob_size > maximum_bytes:
+            # Do not capture an arbitrarily large historical blob in the GUI
+            # process. The bounded Git diff remains available as evidence.
+            return ""
+        data = _run_git_bytes(
+            git_root,
+            [
+                "cat-file",
+                "blob",
+                object_spec,
+            ],
+        )
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        # A deleted path intentionally has no blob in the selected commit.
+        return ""
+    return _decode_text_bytes(data, max_chars)
 
 
 def _status_name(raw: str) -> str:
@@ -797,6 +1028,17 @@ def _git_date_end(value: date) -> str:
 
 
 GIT_COMMIT_MARKER = "@@PROMPTCASE-COMMIT@@"
+GIT_COMMIT_URL_PATTERN = re.compile(
+    r"(?i)https?://[^\s)>\]]+/(?:-/)?commit/([0-9a-f]{7,40})(?![0-9a-f])"
+)
+LABELED_GIT_COMMIT_PATTERN = re.compile(
+    r"(?i)(?:\bcommit\b|\bsha\b|커밋)\s*(?:[:：=]|is)?\s*"
+    r"([0-9a-f]{7,40})(?![0-9a-f])"
+)
+CONVENTIONAL_COMMIT_SUBJECT_PATTERN = re.compile(
+    r"(?i)^\s*\[?\s*(?:feat|fix|refactor|perf|chore|docs|test|build|ci|revert)"
+    r"(?:\([^]\r\n:：]+\))?\s*[:：]"
+)
 SCOPE_GENERIC_TERMS = FOCUS_STOP_TERMS | {
     "api",
     "db",
@@ -943,7 +1185,7 @@ def _commit_recency_score(authored_at: str, date_to: date | None) -> int:
 
 def _git_commit_evidence(root: Path, commit: str, maximum: int) -> str:
     try:
-        evidence = _run_git(
+        evidence, truncated = _run_git_limited(
             root,
             [
                 "-c",
@@ -957,10 +1199,14 @@ def _git_commit_evidence(root: Path, commit: str, maximum: int) -> str:
                 "--",
                 ".",
             ],
+            maximum,
         )
     except (OSError, subprocess.CalledProcessError):
         return ""
-    return evidence[:maximum]
+    if not truncated:
+        return evidence
+    marker = "\n... 커밋 근거 뒷부분 생략 ..."
+    return evidence[: max(0, maximum - len(marker))].rstrip() + marker
 
 
 def _parse_git_commit_history(
@@ -998,6 +1244,11 @@ def _parse_git_commit_history(
         raw_path = parts[-1]
         rename_from = parts[1] if raw_status.upper().startswith("R") and len(parts) >= 3 else ""
         selected = selected_relative(raw_path)
+        moved_out_path = ""
+        if selected is None and rename_from:
+            selected = selected_relative(rename_from)
+            if selected is not None:
+                moved_out_path = raw_path
         if selected is None:
             continue
         relative_path, path = selected
@@ -1007,9 +1258,13 @@ def _parse_git_commit_history(
                 path=relative_path,
                 change_type=_status_name(raw_status),
                 source="git-history",
-                exists=path.exists(),
+                exists=path.exists() and not moved_out_path,
                 modified_at=_modified_iso(path),
-                note=f"이전 경로: {rename_from}" if rename_from else "",
+                note=(
+                    f"이동된 경로: {moved_out_path}"
+                    if moved_out_path
+                    else (f"이전 경로: {rename_from}" if rename_from else "")
+                ),
                 commit=current.commit,
             )
         )
@@ -1203,29 +1458,10 @@ def _rank_commit_files(
                 + (f" ({reason_parts})" if reason_parts else "")
             )
             changes.append(change)
-
-    maximum = max(4, min(100, int(scanner_settings.get("maxSelectedFiles", 24))))
-    if len(changes) <= maximum:
-        return changes
-    query_tokens = set(_scope_tokens(query))
-
-    def file_rank(change: ChangeItem) -> tuple[int, int, str, str]:
-        path_overlap = len(query_tokens & set(_scope_tokens(change.path)))
-        source_value = 0 if Path(change.path).suffix.casefold() == ".md" else 1
-        return (
-            -change.relevance_score,
-            -path_overlap * 10 - source_value,
-            change.root.casefold(),
-            change.path.casefold(),
-        )
-
-    selected = sorted(changes, key=file_rank)[:maximum]
-    _log(
-        log,
-        "WARN",
-        f"선택 커밋의 파일 {len(changes)}개 중 관련도 상위 {maximum}개만 주 분석 대상으로 제한했습니다",
-    )
-    return selected
+    # A selected commit is local source-of-truth evidence.  The prompt/context
+    # builder may trim file bodies later, but the change manifest (and therefore
+    # the Excel program-information sheet) must retain every confirmed path.
+    return changes
 
 
 def collect_git_changes(
@@ -1359,6 +1595,11 @@ def collect_git_changes(
                         else ""
                     )
                     selected = selected_relative(raw_path)
+                    moved_out_path = ""
+                    if selected is None and rename_from:
+                        selected = selected_relative(rename_from)
+                        if selected is not None:
+                            moved_out_path = raw_path
                     if selected is None:
                         continue
                     relative_path, path = selected
@@ -1368,9 +1609,17 @@ def collect_git_changes(
                             path=relative_path,
                             change_type=_status_name(raw_status),
                             source="git-history",
-                            exists=path.exists(),
+                            exists=path.exists() and not moved_out_path,
                             modified_at=_modified_iso(path),
-                            note=f"이전 경로: {rename_from}" if rename_from else "",
+                            note=(
+                                f"이동된 경로: {moved_out_path}"
+                                if moved_out_path
+                                else (
+                                    f"이전 경로: {rename_from}"
+                                    if rename_from
+                                    else ""
+                                )
+                            ),
                         )
                     )
     except (OSError, subprocess.CalledProcessError) as exc:
@@ -1379,6 +1628,168 @@ def collect_git_changes(
 
     merged = _merge_changes(records)
     _log(log, "GIT", f"{root.name}: Git 변경 {len(merged)}개 수집")
+    return merged
+
+
+def parse_explicit_commit_refs(text: str) -> list[str]:
+    """Extract intentional Git commit selectors without treating business IDs as SHAs."""
+
+    refs: list[str] = []
+    for match in GIT_COMMIT_URL_PATTERN.finditer(text):
+        refs.append(match.group(1).casefold())
+    for match in LABELED_GIT_COMMIT_PATTERN.finditer(text):
+        refs.append(match.group(1).casefold())
+    for raw_line in text.splitlines():
+        line = raw_line.strip().lstrip("-*○• ").strip().strip("`").strip()
+        if re.fullmatch(r"(?i)[0-9a-f]{7,40}", line) and re.search(r"(?i)[a-f]", line):
+            refs.append(line.casefold())
+    return list(dict.fromkeys(refs))
+
+
+def _collect_explicit_commit_changes(
+    roots: list[Path],
+    commit_refs: list[str],
+    date_from: date | None,
+    date_to: date | None,
+    log: LogCallback | None,
+) -> list[ChangeItem]:
+    """Resolve explicit commits and keep their exact changes inside selected roots."""
+
+    roots_by_repository: dict[str, tuple[Path, list[Path]]] = {}
+    for root in roots:
+        resolved_root = root.resolve()
+        if not is_git_repository(resolved_root):
+            continue
+        try:
+            git_root = Path(
+                _run_git(resolved_root, ["rev-parse", "--show-toplevel"]).strip()
+            ).resolve()
+        except (OSError, subprocess.CalledProcessError):
+            continue
+        key = str(git_root).casefold()
+        if key not in roots_by_repository:
+            roots_by_repository[key] = (git_root, [])
+        roots_by_repository[key][1].append(resolved_root)
+
+    if not roots_by_repository:
+        raise ValueError("명시한 Git 커밋을 확인할 Git 저장소가 분석 대상에 없습니다.")
+
+    resolved_by_repository: dict[str, list[str]] = {
+        key: [] for key in roots_by_repository
+    }
+    unresolved: list[str] = []
+    for commit_ref in commit_refs:
+        matched = False
+        for key, (git_root, _selected_roots) in roots_by_repository.items():
+            try:
+                full_commit = _run_git(
+                    git_root,
+                    ["rev-parse", "--verify", f"{commit_ref}^{{commit}}"],
+                ).strip()
+            except (OSError, subprocess.CalledProcessError):
+                continue
+            if not re.fullmatch(r"(?i)[0-9a-f]{40}", full_commit):
+                continue
+            matched = True
+            if full_commit not in resolved_by_repository[key]:
+                resolved_by_repository[key].append(full_commit)
+        if not matched:
+            unresolved.append(commit_ref)
+
+    if unresolved:
+        labels = ", ".join(value[:8] for value in unresolved)
+        raise ValueError(
+            f"명시한 Git 커밋 {labels}을(를) 분석 대상 저장소에서 찾을 수 없습니다."
+        )
+
+    records: list[ChangeItem] = []
+    for key, (git_root, selected_roots) in roots_by_repository.items():
+        for full_commit in resolved_by_repository[key]:
+            try:
+                metadata = _run_git(
+                    git_root,
+                    [
+                        "show",
+                        "-s",
+                        "--date=iso-strict",
+                        f"--format={GIT_COMMIT_MARKER}%H%x09%aI%x09%s",
+                        full_commit,
+                    ],
+                )
+                base_commit = _git_first_parent_or_empty_tree(
+                    git_root,
+                    full_commit,
+                )
+                name_status = _run_git(
+                    git_root,
+                    [
+                        "-c",
+                        "core.quotepath=false",
+                        "diff",
+                        "--find-renames",
+                        "--name-status",
+                        base_commit,
+                        full_commit,
+                        "--",
+                        ".",
+                    ],
+                )
+                history = metadata.rstrip() + "\n" + name_status
+            except (OSError, subprocess.CalledProcessError) as exc:
+                raise ValueError(
+                    f"명시한 Git 커밋 {full_commit[:8]}의 변경 파일을 읽을 수 없습니다."
+                ) from exc
+
+            commit_date: date | None = None
+            for line in history.splitlines():
+                if not line.startswith(GIT_COMMIT_MARKER):
+                    continue
+                metadata = line[len(GIT_COMMIT_MARKER) :].split("\t", 2)
+                if len(metadata) >= 2:
+                    commit_date = _commit_date(metadata[1])
+                break
+            if commit_date and not _is_date_inside(commit_date, date_from, date_to):
+                _log(
+                    log,
+                    "WARN",
+                    f"명시한 커밋 {full_commit[:8]}은 입력 날짜 범위 밖이지만 "
+                    "사용자 지정 범위를 우선해 포함합니다",
+                )
+
+            selected_count = 0
+            for selected_root in selected_roots:
+                candidates = _parse_git_commit_history(
+                    selected_root,
+                    git_root,
+                    history,
+                )
+                for candidate in candidates:
+                    for change in candidate.changes:
+                        change.source = "git-explicit-commit"
+                        change.relevance_score = 100
+                        change.selection_reason = (
+                            f"사용자가 명시한 커밋 {full_commit[:8]}"
+                        )
+                        records.append(change)
+                        selected_count += 1
+            _log(
+                log,
+                "SCOPE",
+                f"명시 커밋 {full_commit[:8]}에서 선택한 분석 경로 안의 "
+                f"변경 {selected_count}개를 확정",
+            )
+
+    merged = _merge_explicit_commit_changes(records)
+    if not merged:
+        labels = ", ".join(value[:8] for value in commit_refs)
+        raise ValueError(
+            f"명시한 Git 커밋 {labels}에는 선택한 분석 경로 안의 변경 파일이 없습니다."
+        )
+    _log(
+        log,
+        "GIT",
+        f"명시한 커밋 {len(commit_refs)}개에서 변경 {len(merged)}개를 정확 범위로 수집",
+    )
     return merged
 
 
@@ -1688,7 +2099,14 @@ def resolve_manual_changes_across_roots(
 
 def _merge_changes(changes: Iterable[ChangeItem]) -> list[ChangeItem]:
     merged: dict[str, ChangeItem] = {}
-    source_priority = {"manual": 4, "git-working-tree": 3, "git-history": 2, "modified-date": 1}
+    source_priority = {
+        "git-explicit-commit": 6,
+        "manual": 5,
+        "git-working-tree": 4,
+        "git-related-recovery": 3,
+        "git-history": 2,
+        "modified-date": 1,
+    }
     for item in changes:
         key = str((Path(item.root) / Path(item.path)).resolve(strict=False)).casefold()
         previous = merged.get(key)
@@ -1718,6 +2136,78 @@ def _merge_changes(changes: Iterable[ChangeItem]) -> list[ChangeItem]:
     return sorted(merged.values(), key=lambda item: (item.root.casefold(), item.path.casefold()))
 
 
+def _merge_explicit_commit_changes(changes: Iterable[ChangeItem]) -> list[ChangeItem]:
+    """Merge explicit paths using the final selected descendant's A/M/D/R state."""
+
+    grouped: dict[str, list[ChangeItem]] = {}
+    for item in changes:
+        key = str((Path(item.root) / Path(item.path)).resolve(strict=False)).casefold()
+        grouped.setdefault(key, []).append(item)
+
+    merged_rows: list[ChangeItem] = []
+    for rows in grouped.values():
+        commits = list(
+            dict.fromkeys(
+                commit.strip()
+                for row in rows
+                for commit in row.commit.split(",")
+                if commit.strip()
+            )
+        )
+        try:
+            final_commit = _git_descendant_snapshot_commit(
+                Path(rows[0].root),
+                commits,
+            )
+        except OSError:
+            final_commit = ""
+        final_state: tuple[str, bool, str, str] | None = None
+        if final_commit:
+            final_row = next(
+                (
+                    row
+                    for row in rows
+                    if final_commit
+                    in {
+                        value.strip()
+                        for value in row.commit.split(",")
+                        if value.strip()
+                    }
+                ),
+                None,
+            )
+            if final_row is not None:
+                final_state = (
+                    final_row.change_type,
+                    (
+                        final_row.change_type != "삭제"
+                        and "이동된 경로:" not in final_row.note
+                    ),
+                    final_row.modified_at,
+                    (
+                        f"사용자가 명시한 commit {len(commits)}개 중 "
+                        f"최종 후손 {final_commit[:8]} 상태"
+                    ),
+                )
+        merged = _merge_changes(rows)[0]
+        if final_state is not None:
+            (
+                merged.change_type,
+                merged.exists,
+                merged.modified_at,
+                merged.selection_reason,
+            ) = final_state
+        elif len({row.change_type for row in rows}) > 1:
+            # Incomparable branches have no single defensible net state.
+            merged.change_type = "변경"
+            merged.selection_reason = "서로 비교할 수 없는 명시 commit의 변경 합집합"
+        merged_rows.append(merged)
+    return sorted(
+        merged_rows,
+        key=lambda item: (item.root.casefold(), item.path.casefold()),
+    )
+
+
 def collect_changes(
     roots: list[Path],
     manual_text: str,
@@ -1739,6 +2229,11 @@ def collect_changes(
     truncated = False
     manual_records = parse_manual_changes(manual_text)
     change_notes = parse_manual_notes(manual_text)
+    explicit_commit_refs = parse_explicit_commit_refs(manual_text)
+    if explicit_commit_refs and not include_git:
+        raise ValueError(
+            "명시한 Git 커밋을 분석하려면 Git 변경 수집을 활성화해야 합니다."
+        )
 
     normalized_roots: list[Path] = []
     for root in roots:
@@ -1754,7 +2249,7 @@ def collect_changes(
         excluded_total += excluded
         truncated = truncated or was_truncated
         git_available = include_git and is_git_repository(root)
-        if git_available:
+        if git_available and not explicit_commit_refs:
             git_scope_changes.extend(
                 collect_git_changes(
                     root,
@@ -1768,7 +2263,7 @@ def collect_changes(
             )
         # File modification times are a Git-less fallback.  Mixing them into
         # a valid Git history reintroduces every touched/generated file.
-        if (date_from or date_to) and not git_available:
+        if (date_from or date_to) and not git_available and not explicit_commit_refs:
             date_changes = collect_date_changes(index, date_from, date_to)
             all_changes.extend(date_changes)
             range_label = (
@@ -1777,6 +2272,29 @@ def collect_changes(
             )
             _log(log, "DATE", f"{root.name}: {range_label} 파일 {len(date_changes)}개")
 
+    if explicit_commit_refs:
+        if manual_records:
+            _log(
+                log,
+                "INFO",
+                "명시한 커밋 URL/SHA가 있어 수동 파일 경로와 날짜 추정 대신 "
+                "해당 커밋의 실제 변경만 확정 범위로 사용합니다",
+            )
+        explicit_changes = _collect_explicit_commit_changes(
+            normalized_roots,
+            explicit_commit_refs,
+            date_from,
+            date_to,
+            log,
+        )
+        return explicit_changes, indexes, excluded_total, truncated
+
+    manual_changes = resolve_manual_changes_across_roots(
+        normalized_roots,
+        indexes,
+        manual_records,
+        log,
+    )
     if git_scope_changes and (change_notes or request_text.strip()):
         working_tree = [
             item for item in git_scope_changes if item.source == "git-working-tree"
@@ -1795,42 +2313,30 @@ def collect_changes(
                     item for item in history if item.relevance_score >= cutoff
                 ]
             else:
-                # When every root is uncertain, keep one best commit globally
-                # instead of one arbitrary commit from each selected root.
-                selected_commit = max(
-                    history,
-                    key=lambda item: (
-                        item.relevance_score,
-                        item.modified_at,
-                        item.commit,
-                    ),
-                ).commit
-                selected_history = [
-                    item for item in history if item.commit == selected_commit
-                ]
-            global_file_limit = max(
-                4,
-                min(100, int(scanner_settings.get("maxSelectedFiles", 24))),
-            )
-            if len(selected_history) > global_file_limit:
-                query_tokens = set(
-                    _scope_tokens("\n".join((*change_notes, request_text)))
-                )
-                selected_history = sorted(
-                    selected_history,
-                    key=lambda item: (
-                        -item.relevance_score,
-                        -len(query_tokens & set(_scope_tokens(item.path))),
-                        Path(item.path).suffix.casefold() == ".md",
-                        item.root.casefold(),
-                        item.path.casefold(),
-                    ),
-                )[:global_file_limit]
-                _log(
-                    log,
-                    "WARN",
-                    f"전체 프로젝트의 Git 변경을 관련도 상위 {global_file_limit}개 파일로 제한했습니다",
-                )
+                if manual_changes:
+                    # Exact user paths are stronger evidence than an unrelated
+                    # low-scoring commit. Recovery can safely inspect nearby Git
+                    # history from these paths without polluting the manifest.
+                    selected_history = []
+                    _log(
+                        log,
+                        "SCOPE",
+                        "수동 변경 경로가 매칭되어 저신뢰 Git 커밋 후보를 변경 범위에서 제외했습니다",
+                    )
+                else:
+                    # With no usable path seed, keep one best commit globally so
+                    # a vague request can still produce bounded evidence.
+                    selected_commit = max(
+                        history,
+                        key=lambda item: (
+                            item.relevance_score,
+                            item.modified_at,
+                            item.commit,
+                        ),
+                    ).commit
+                    selected_history = [
+                        item for item in history if item.commit == selected_commit
+                    ]
             discarded = len(history) - len(selected_history)
             if discarded:
                 _log(
@@ -1849,11 +2355,87 @@ def collect_changes(
             ]
     all_changes.extend(git_scope_changes)
 
-    all_changes.extend(
-        resolve_manual_changes_across_roots(normalized_roots, indexes, manual_records, log)
-    )
+    all_changes.extend(manual_changes)
+    merged_changes = _merge_changes(all_changes)
+    if include_git and (date_from or date_to):
+        recovery_query = "\n".join((*change_notes, request_text))
+        has_working_tree = any(
+            change.source == "git-working-tree" for change in merged_changes
+        )
+        best_history_score = max(
+            (
+                change.relevance_score
+                for change in merged_changes
+                if change.source == "git-history"
+            ),
+            default=0,
+        )
+        if (
+            not manual_changes
+            and not has_working_tree
+            and best_history_score < 20
+            and _scope_normalized(recovery_query)
+        ):
+            semantic_seeds = _recover_semantic_git_seeds(
+                normalized_roots,
+                date_from,
+                date_to,
+                scanner_settings,
+                change_notes,
+                request_text,
+                log,
+            )
+            if semantic_seeds:
+                merged_changes = _merge_changes(
+                    [
+                        *[
+                            change
+                            for change in merged_changes
+                            if change.source != "git-history"
+                        ],
+                        *semantic_seeds,
+                    ]
+                )
+        selected_history_commits = {
+            commit.strip()
+            for change in merged_changes
+            if change.source == "git-history"
+            for commit in change.commit.split(",")
+            if commit.strip()
+        }
+        commit_subject_scope = (
+            not manual_changes
+            and not has_working_tree
+            and len(selected_history_commits) == 1
+            and best_history_score >= 35
+            and any(
+                CONVENTIONAL_COMMIT_SUBJECT_PATTERN.match(note)
+                for note in change_notes
+            )
+        )
+        if commit_subject_scope:
+            selected_commit = next(iter(selected_history_commits))
+            _log(
+                log,
+                "SCOPE",
+                f"커밋 제목 형식과 일치하는 단일 커밋 {selected_commit[:8]}을 "
+                "확정 범위로 사용해 "
+                "인접 날짜의 변경 자동 승격을 생략합니다",
+            )
+        else:
+            recovered = _recover_related_git_changes(
+                normalized_roots,
+                indexes,
+                merged_changes,
+                date_from,
+                date_to,
+                scanner_settings,
+                recovery_query,
+                log,
+            )
+            merged_changes = _merge_changes([*merged_changes, *recovered])
 
-    return _merge_changes(all_changes), indexes, excluded_total, truncated
+    return merged_changes, indexes, excluded_total, truncated
 
 
 def _clean_reference(value: str) -> str:
@@ -2718,6 +3300,7 @@ def _git_diff(
 ) -> str:
     _validate_date_range(date_from, date_to)
     chunks: list[str] = []
+    diff_truncated = False
     historical_range = date_to is not None and date_to < date.today()
     if date_from or date_to:
         base = ""
@@ -2753,7 +3336,7 @@ def _git_diff(
                 revisions = [base]
                 if target:
                     revisions.append(target)
-                combined = _run_git(
+                combined, was_truncated = _run_git_limited(
                     root,
                     [
                         "diff",
@@ -2764,31 +3347,37 @@ def _git_diff(
                         "--",
                         relative_path,
                     ],
+                    max_chars,
                 )
                 if combined.strip():
                     chunks.append(combined)
+                    diff_truncated = diff_truncated or was_truncated
             except (OSError, subprocess.CalledProcessError):
                 pass
     if not chunks and historical_range:
         return ""
     if not chunks:
         try:
-            working = _run_git(
+            working, working_truncated = _run_git_limited(
                 root,
                 ["diff", "--find-renames", "--no-ext-diff", "--unified=4", "--", relative_path],
+                max_chars,
             )
-            cached = _run_git(
+            cached, cached_truncated = _run_git_limited(
                 root,
                 ["diff", "--cached", "--find-renames", "--no-ext-diff", "--unified=4", "--", relative_path],
+                max_chars,
             )
             if working.strip():
                 chunks.append(working)
+                diff_truncated = diff_truncated or working_truncated
             if cached.strip():
                 chunks.append(cached)
+                diff_truncated = diff_truncated or cached_truncated
         except (OSError, subprocess.CalledProcessError):
             return ""
     combined = _redact_sensitive_text("\n".join(chunks)).strip()
-    if len(combined) <= max_chars:
+    if len(combined) <= max_chars and not diff_truncated:
         return combined
     marker = "\n... diff 뒷부분 생략 ..."
     return combined[: max(0, max_chars - len(marker))].rstrip() + marker
@@ -2800,34 +3389,110 @@ def _git_selected_commit_diff(
     relative_path: str,
     max_chars: int = 16000,
 ) -> str:
+    marker = "\n... 선택 커밋 diff 뒷부분 생략 ..."
     chunks: list[str] = []
-    commit_values = [value.strip() for value in commits.split(",") if value.strip()][:5]
-    for commit in commit_values:
+    diff_truncated = False
+    commit_values = list(
+        dict.fromkeys(
+            value.strip() for value in commits.split(",") if value.strip()
+        )
+    )
+    try:
+        final_commit = _git_descendant_snapshot_commit(root, commit_values)
+    except OSError:
+        final_commit = ""
+    if final_commit:
+        commit_values = [
+            final_commit,
+            *(value for value in commit_values if value != final_commit),
+        ]
+
+    payload_limit = max(1, max_chars - len(marker))
+    used = 0
+    for index, commit in enumerate(commit_values):
+        header = f"[commit {commit[:8]}]\n"
+        remaining = payload_limit - used - (1 if chunks else 0) - len(header)
+        if remaining <= 0:
+            diff_truncated = True
+            break
         try:
-            value = _run_git(
+            base_commit = _git_first_parent_or_empty_tree(root, commit)
+            value, was_truncated = _run_git_limited(
                 root,
                 [
                     "-c",
                     "core.quotepath=false",
-                    "show",
-                    "--format=",
+                    "diff",
                     "--find-renames",
                     "--no-ext-diff",
                     "--unified=4",
+                    base_commit,
                     commit,
                     "--",
                     relative_path,
                 ],
+                remaining,
             )
         except (OSError, subprocess.CalledProcessError):
             continue
         if value.strip():
-            chunks.append(f"[commit {commit[:8]}]\n{value}")
+            chunks.append(header + value)
+            used = sum(len(chunk) for chunk in chunks) + max(0, len(chunks) - 1)
+            diff_truncated = diff_truncated or was_truncated
+            if was_truncated:
+                break
+        if index < len(commit_values) - 1 and used >= payload_limit:
+            diff_truncated = True
+            break
     combined = _redact_sensitive_text("\n".join(chunks)).strip()
-    if len(combined) <= max_chars:
-        return combined
-    marker = "\n... 선택 커밋 diff 뒷부분 생략 ..."
-    return combined[: max(0, max_chars - len(marker))].rstrip() + marker
+    if not diff_truncated:
+        return combined[:max_chars]
+    return combined[:payload_limit].rstrip() + marker
+
+
+def _changed_diff_lines(diff: str) -> str:
+    """Return only added/deleted hunk lines, excluding paths and context."""
+
+    changed: list[str] = []
+    inside_hunk = False
+    for line in diff.splitlines():
+        if line.startswith("@@"):
+            inside_hunk = True
+            continue
+        if line.startswith("diff --git ") or line.startswith("[commit "):
+            inside_hunk = False
+            continue
+        if not inside_hunk or line.startswith(("+++", "---")):
+            continue
+        if line.startswith(("+", "-")):
+            changed.append(line[1:])
+    return "\n".join(changed)
+
+
+def _changed_diff_hunks(diff: str) -> str:
+    """Return hunk bodies while still excluding file headers and path metadata."""
+
+    hunks: list[str] = []
+    current: list[str] = []
+    inside_hunk = False
+    for line in diff.splitlines():
+        if line.startswith("@@"):
+            if current:
+                hunks.extend(current)
+                current = []
+            inside_hunk = True
+            continue
+        if line.startswith("diff --git ") or line.startswith("[commit "):
+            if current:
+                hunks.extend(current)
+                current = []
+            inside_hunk = False
+            continue
+        if inside_hunk and not line.startswith(("+++", "---")):
+            current.append(line[1:] if line.startswith((" ", "+", "-")) else line)
+    if current:
+        hunks.extend(current)
+    return "\n".join(hunks)
 
 
 def _candidate_relation(
@@ -2952,6 +3617,881 @@ def _candidate_relation(
     )
 
 
+def _recover_semantic_git_seeds(
+    roots: list[Path],
+    date_from: date | None,
+    date_to: date | None,
+    scanner_settings: dict[str, Any],
+    change_notes: list[str],
+    request_text: str,
+    log: LogCallback | None,
+) -> list[ChangeItem]:
+    """Find one coherent multi-file commit when both paths and dates are vague."""
+
+    query = "\n".join((*change_notes, request_text))
+    query_tokens = set(
+        _scope_tokens(re.sub(r"\.[A-Za-z0-9_+-]{1,16}\b", "", query))
+    )
+    if not query_tokens:
+        return []
+
+    grace_days = max(1, min(45, int(scanner_settings.get("scopeRecoveryDays", 21))))
+    max_commits = max(
+        10,
+        min(300, int(scanner_settings.get("scopeRecoveryMaxCommits", 120))),
+    )
+    minimum = max(
+        24,
+        min(80, int(scanner_settings.get("scopeRecoverySemanticMinScore", 34))),
+    )
+    max_recovered = max(
+        1,
+        min(40, int(scanner_settings.get("scopeRecoveryMaxFiles", 12))),
+    )
+    grouped_candidates: dict[
+        tuple[str, str],
+        list[GitCommitCandidate],
+    ] = {}
+
+    for root in roots:
+        resolved_root = root.resolve()
+        if not is_git_repository(resolved_root):
+            continue
+        date_args: list[str] = []
+        if date_from:
+            date_args.append(
+                f"--since={_git_date_start(date_from - timedelta(days=grace_days))}"
+            )
+        if date_to:
+            date_args.append(
+                f"--until={_git_date_end(date_to + timedelta(days=grace_days))}"
+            )
+        try:
+            git_root = Path(
+                _run_git(resolved_root, ["rev-parse", "--show-toplevel"]).strip()
+            ).resolve()
+            history = _run_git(
+                resolved_root,
+                [
+                    "-c",
+                    "core.quotepath=false",
+                    "log",
+                    f"--max-count={max_commits}",
+                    *date_args,
+                    "--date=iso-strict",
+                    "--name-status",
+                    f"--format={GIT_COMMIT_MARKER}%H%x09%aI%x09%s",
+                    "--",
+                    ".",
+                ],
+            )
+        except (OSError, subprocess.CalledProcessError):
+            continue
+        commits = _parse_git_commit_history(resolved_root, git_root, history)
+        scored = _score_git_commits(
+            resolved_root,
+            commits,
+            change_notes,
+            request_text,
+            date_to,
+            scanner_settings,
+            None,
+        )
+        for commit in scored:
+            grouped_candidates.setdefault(
+                (str(git_root).casefold(), commit.commit),
+                [],
+            ).append(commit)
+
+    ranked_groups: list[
+        tuple[int, GitCommitCandidate, list[tuple[int, ChangeItem]]]
+    ] = []
+    for candidates in grouped_candidates.values():
+        changes = _merge_changes(
+            change
+            for candidate in candidates
+            for change in candidate.changes
+        )
+        if len(changes) < 2:
+            continue
+        direct_matches: list[tuple[int, ChangeItem]] = []
+        family_counts: dict[str, int] = {}
+        path_token_counts: dict[str, int] = {}
+        for change in changes:
+            path_tokens = set(
+                _scope_tokens(
+                    re.sub(
+                        r"\.[A-Za-z0-9_+-]{1,16}$",
+                        "",
+                        change.path,
+                    )
+                )
+            )
+            overlap = len(query_tokens & path_tokens)
+            if overlap:
+                direct_matches.append((overlap, change))
+            for token in _recovery_path_tokens(change.path):
+                path_token_counts[token] = path_token_counts.get(token, 0) + 1
+            family = _business_family(Path(change.path))
+            if family:
+                family_counts[family] = family_counts.get(family, 0) + 1
+        coherent_count = max(
+            max(family_counts.values(), default=0),
+            max(path_token_counts.values(), default=0),
+        )
+        if len(direct_matches) < 2 or coherent_count < 2:
+            continue
+
+        representative = max(
+            candidates,
+            key=lambda candidate: (
+                candidate.score,
+                candidate.authored_at,
+                candidate.commit,
+            ),
+        )
+        subject_tokens = set(_scope_tokens(representative.subject))
+        initial_like = bool(
+            subject_tokens
+            & {"bootstrap", "init", "initial", "initialize", "scaffold"}
+        )
+        new_count = sum(change.change_type == "신규" for change in changes)
+        if initial_like and new_count * 5 >= len(changes) * 4:
+            continue
+        low_value_penalty = (
+            12 if subject_tokens & SCOPE_RECOVERY_LOW_VALUE_TERMS else 0
+        )
+        semantic_score = (
+            max(candidate.score for candidate in candidates)
+            + min(18, len(changes) * 3)
+            + min(18, len(direct_matches) * 6)
+            + min(14, coherent_count * 3)
+            - low_value_penalty
+        )
+        combined = GitCommitCandidate(
+            representative.commit,
+            representative.authored_at,
+            representative.subject,
+            changes,
+            score=max(candidate.score for candidate in candidates),
+        )
+        ranked_groups.append((semantic_score, combined, direct_matches))
+
+    if not ranked_groups:
+        return []
+    ranked_groups.sort(
+        key=lambda row: (
+            row[0],
+            row[1].authored_at,
+            row[1].commit,
+        ),
+        reverse=True,
+    )
+    best_score, best_commit, direct_matches = ranked_groups[0]
+    if best_score < minimum:
+        _log(
+            log,
+            "SCOPE-RECOVERY",
+            f"경로 없는 입력의 날짜 보완 후보가 신뢰 기준에 미달해 자동 선택하지 않음 "
+            f"({best_score}점 < {minimum}점)",
+        )
+        return []
+    if len(ranked_groups) > 1:
+        runner_up = ranked_groups[1][0]
+        if best_score < 50 and best_score - runner_up < 8:
+            _log(
+                log,
+                "SCOPE-RECOVERY",
+                f"경로 없는 입력의 후보 점수가 비슷해 자동 선택하지 않음 "
+                f"({best_score}점 / {runner_up}점)",
+            )
+            return []
+
+    ranked_matches = sorted(
+        direct_matches,
+        key=lambda row: (
+            -row[0],
+            row[1].root.casefold(),
+            row[1].path.casefold(),
+        ),
+    )
+    selected: list[ChangeItem] = []
+    for overlap in sorted({row[0] for row in ranked_matches}, reverse=True):
+        buckets: dict[str, list[ChangeItem]] = {}
+        for row_overlap, change in ranked_matches:
+            if row_overlap == overlap:
+                buckets.setdefault(change.root.casefold(), []).append(change)
+        while buckets and len(selected) < max_recovered:
+            for root_key in sorted(tuple(buckets)):
+                bucket = buckets[root_key]
+                selected.append(bucket.pop(0))
+                if not bucket:
+                    del buckets[root_key]
+                if len(selected) >= max_recovered:
+                    break
+        if len(selected) >= max_recovered:
+            break
+    authored = _commit_date(best_commit.authored_at)
+    outside = not _is_date_inside(authored, date_from, date_to)
+    for change in selected:
+        change.source = "git-related-recovery"
+        change.relevance_score = min(100, best_score)
+        change.note = "; ".join(
+            filter(
+                None,
+                (
+                    change.note,
+                    (
+                        "경로가 없는 입력에서 날짜 밖의 응집된 Git 변경을 복구"
+                        if outside
+                        else "경로가 없는 입력에서 응집된 Git 변경을 복구"
+                    ),
+                ),
+            )
+        )
+        change.selection_reason = (
+            f"다중 파일 변경 군집 {best_score}점; "
+            f"커밋 {best_commit.commit[:8]} | {best_commit.subject}"
+        )
+    _log(
+        log,
+        "SCOPE-RECOVERY",
+        f"경로 없는 입력에서 응집된 Git 커밋 {best_commit.commit[:8]} "
+        f"{len(selected)}개 파일을 보완 앵커로 선택 ({best_score}점)",
+    )
+    return selected
+
+
+def _commit_date(value: str) -> date | None:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+    except (TypeError, ValueError):
+        return None
+
+
+def _recovery_path_tokens(value: str) -> set[str]:
+    without_extension = re.sub(r"\.[A-Za-z0-9_+-]{1,16}$", "", value)
+    return {
+        token
+        for token in _scope_tokens(without_extension)
+        if token not in SCOPE_RECOVERY_GENERIC_TOKENS
+    }
+
+
+def _is_date_inside(value: date | None, date_from: date | None, date_to: date | None) -> bool:
+    if value is None:
+        return False
+    if date_from and value < date_from:
+        return False
+    if date_to and value > date_to:
+        return False
+    return True
+
+
+def _recover_related_git_changes(
+    roots: list[Path],
+    indexes: dict[str, list[IndexedFile]],
+    changes: list[ChangeItem],
+    date_from: date | None,
+    date_to: date | None,
+    scanner_settings: dict[str, Any],
+    query: str,
+    log: LogCallback | None,
+) -> list[ChangeItem]:
+    """Recover omitted, actually changed files through high-confidence relations.
+
+    The widened date range is used only as a candidate pool.  A file is promoted
+    to the change manifest only when it has Git history, an explicit source-level
+    relation to an existing seed and same-commit or nearby-diff evidence.  This
+    deliberately keeps merely related, unchanged files in the context tier.
+    """
+
+    if scanner_settings.get("scopeRecoveryEnabled", True) is False or not changes:
+        return []
+
+    grace_days = max(1, min(45, int(scanner_settings.get("scopeRecoveryDays", 21))))
+    cluster_days = max(
+        0,
+        min(14, int(scanner_settings.get("scopeRecoveryCommitDistanceDays", 7))),
+    )
+    max_commits = max(
+        10,
+        min(300, int(scanner_settings.get("scopeRecoveryMaxCommits", 120))),
+    )
+    max_candidate_files = max(
+        12,
+        min(500, int(scanner_settings.get("scopeRecoveryMaxCandidateFiles", 160))),
+    )
+    max_recovered = max(
+        1,
+        min(40, int(scanner_settings.get("scopeRecoveryMaxFiles", 12))),
+    )
+    source_limit = max(
+        12000,
+        min(120000, int(scanner_settings.get("maxSourceScanChars", 120000))),
+    )
+    additional_source_suffixes = _normalize_additional_source_suffixes(
+        scanner_settings.get("additionalSourceSuffixes")
+    )
+    existing_keys = {change.key() for change in changes}
+    recovered_by_repository: dict[str, list[ChangeItem]] = {}
+    existing_recovery_by_repository: dict[str, set[tuple[str, str]]] = {}
+    repository_labels: dict[str, str] = {}
+    repository_by_root: dict[str, tuple[Path, str]] = {}
+
+    for root in roots:
+        resolved_root = root.resolve()
+        root_key = str(resolved_root).casefold()
+        if not is_git_repository(resolved_root):
+            continue
+        try:
+            git_root = Path(
+                _run_git(resolved_root, ["rev-parse", "--show-toplevel"]).strip()
+            ).resolve()
+        except (OSError, subprocess.CalledProcessError):
+            continue
+        repository_key = str(git_root).casefold()
+        repository_by_root[root_key] = (git_root, repository_key)
+        repository_labels[repository_key] = git_root.name
+        existing_recovery_by_repository.setdefault(repository_key, set()).update(
+            change.key()
+            for change in changes
+            if (
+                change.source == "git-related-recovery"
+                and str(Path(change.root).resolve()).casefold() == root_key
+            )
+        )
+
+    for root in roots:
+        resolved_root = root.resolve()
+        root_key = str(resolved_root).casefold()
+        repository = repository_by_root.get(root_key)
+        if repository is None:
+            continue
+        git_root, repository_key = repository
+
+        root_changes = [
+            change for change in changes if str(Path(change.root).resolve()).casefold() == root_key
+        ]
+        if not root_changes:
+            continue
+        manual_seeds = [change for change in root_changes if change.source == "manual"]
+        seed_changes = manual_seeds or root_changes
+        indexed_by_path = {
+            item.relative_path.casefold(): item
+            for item in indexes.get(str(resolved_root), indexes.get(str(root), []))
+        }
+        profiles: list[ChangedProfile] = []
+        for change in seed_changes:
+            candidate = indexed_by_path.get(change.path.replace("\\", "/").casefold())
+            if candidate is None or not candidate.path.is_file():
+                continue
+            try:
+                source = _read_text(candidate.path, source_limit)
+            except OSError:
+                continue
+            profiles.append(
+                ChangedProfile(
+                    change=change,
+                    path=candidate.path,
+                    role=_file_role(Path(change.path)),
+                    family=_business_family(Path(change.path)),
+                    signals=_extract_reference_signals(
+                        candidate.path,
+                        source,
+                        additional_source_suffixes,
+                    ),
+                    terms=_extract_terms(
+                        candidate.path,
+                        source,
+                        additional_source_suffixes,
+                    ),
+                )
+            )
+        if not profiles:
+            continue
+
+        extended_from = date_from - timedelta(days=grace_days) if date_from else None
+        extended_to = date_to + timedelta(days=grace_days) if date_to else None
+        date_args: list[str] = []
+        if extended_from:
+            date_args.append(f"--since={_git_date_start(extended_from)}")
+        if extended_to:
+            date_args.append(f"--until={_git_date_end(extended_to)}")
+        try:
+            history = _run_git(
+                resolved_root,
+                [
+                    "-c",
+                    "core.quotepath=false",
+                    "log",
+                    f"--max-count={max_commits}",
+                    *date_args,
+                    "--date=iso-strict",
+                    "--name-status",
+                    f"--format={GIT_COMMIT_MARKER}%H%x09%aI%x09%s",
+                    "--",
+                    ".",
+                ],
+            )
+        except (OSError, subprocess.CalledProcessError) as exc:
+            _log(log, "WARN", f"{resolved_root.name}: 변경 범위 보완용 Git 이력 수집 실패 - {exc}")
+            continue
+
+        commits = _parse_git_commit_history(resolved_root, git_root, history)
+        seed_paths = {
+            profile.change.path.replace("\\", "/").casefold() for profile in profiles
+        }
+        matching_anchor_commits = [
+            commit
+            for commit in commits
+            if any(change.path.casefold() in seed_paths for change in commit.changes)
+        ]
+        declared_anchor_ids = {
+            commit_id.strip()
+            for profile in profiles
+            for commit_id in profile.change.commit.split(",")
+            if commit_id.strip()
+        }
+        anchor_commits = [
+            commit
+            for commit in matching_anchor_commits
+            if commit.commit in declared_anchor_ids
+        ]
+        if not anchor_commits:
+            inside_anchors = [
+                commit
+                for commit in matching_anchor_commits
+                if _is_date_inside(_commit_date(commit.authored_at), date_from, date_to)
+            ]
+            anchor_commits = inside_anchors
+        if not anchor_commits and matching_anchor_commits:
+            target_date = date_from or date_to or date.today()
+            closest_distance = min(
+                abs(((_commit_date(commit.authored_at) or date.min) - target_date).days)
+                for commit in matching_anchor_commits
+            )
+            anchor_commits = [
+                commit
+                for commit in matching_anchor_commits
+                if abs(((_commit_date(commit.authored_at) or date.min) - target_date).days)
+                == closest_distance
+            ]
+        if not anchor_commits:
+            _log(
+                log,
+                "SCOPE-RECOVERY",
+                f"{resolved_root.name}: 확장 후보 구간에서 입력 파일의 Git 변경 시점을 확인하지 못해 자동 승격을 생략",
+            )
+            continue
+
+        for profile in profiles:
+            if profile.change.commit:
+                continue
+            profile_path = profile.change.path.replace("\\", "/").casefold()
+            matched_ids = [
+                commit.commit
+                for commit in anchor_commits
+                if any(
+                    change.path.casefold() == profile_path
+                    for change in commit.changes
+                )
+            ]
+            if not matched_ids:
+                continue
+            profile.change.commit = ", ".join(dict.fromkeys(matched_ids))
+            profile.change.selection_reason = "; ".join(
+                filter(
+                    None,
+                    (
+                        profile.change.selection_reason,
+                        "입력 파일의 확장 구간 Git 변경 시점을 보완 앵커로 확인",
+                    ),
+                )
+            )
+
+        for profile in profiles:
+            if not profile.change.commit:
+                continue
+            anchor_source = _git_file_snapshot(
+                resolved_root,
+                profile.change.commit,
+                profile.change.path,
+                source_limit,
+                prefer_first=True,
+            )
+            if not anchor_source:
+                continue
+            profile.signals = _extract_reference_signals(
+                profile.path,
+                anchor_source,
+                additional_source_suffixes,
+            )
+            profile.terms = _extract_terms(
+                profile.path,
+                anchor_source,
+                additional_source_suffixes,
+            )
+
+        anchor_ids = {commit.commit for commit in anchor_commits}
+        anchor_subjects = [commit.subject for commit in anchor_commits if commit.subject]
+        anchor_dates = [
+            authored
+            for authored in (_commit_date(commit.authored_at) for commit in anchor_commits)
+            if authored is not None
+        ]
+        seed_tokens = set().union(
+            *(_recovery_path_tokens(profile.change.path) for profile in profiles)
+        )
+
+        rows_by_path: dict[str, tuple[GitCommitCandidate, ChangeItem, int, bool]] = {}
+        for commit in commits:
+            authored = _commit_date(commit.authored_at)
+            distance = (
+                min(abs((authored - anchor).days) for anchor in anchor_dates)
+                if authored is not None and anchor_dates
+                else 999
+            )
+            same_commit = commit.commit in anchor_ids
+            if not same_commit and distance > cluster_days:
+                continue
+            for item in commit.changes:
+                path_key = item.path.casefold()
+                if (root_key, path_key) in existing_keys or path_key in seed_paths:
+                    continue
+                indexed = indexed_by_path.get(path_key)
+                if indexed is None or not indexed.path.is_file():
+                    continue
+                previous = rows_by_path.get(path_key)
+                rank = (not same_commit, distance, commit.authored_at, commit.commit)
+                if previous is None:
+                    rows_by_path[path_key] = (commit, item, distance, same_commit)
+                    continue
+                previous_commit, _previous_item, previous_distance, previous_same = previous
+                previous_rank = (
+                    not previous_same,
+                    previous_distance,
+                    previous_commit.authored_at,
+                    previous_commit.commit,
+                )
+                if rank < previous_rank:
+                    rows_by_path[path_key] = (commit, item, distance, same_commit)
+
+        query_tokens = _recovery_path_tokens(query)
+        candidate_rows = sorted(
+            rows_by_path.values(),
+            key=lambda row: (
+                not row[3],
+                row[2],
+                -len(
+                    (seed_tokens | query_tokens)
+                    & _recovery_path_tokens(row[1].path)
+                ),
+                row[1].path.casefold(),
+            ),
+        )[:max_candidate_files]
+
+        root_recovered: list[ChangeItem] = []
+        for commit, history_item, distance, same_commit in candidate_rows:
+            indexed = indexed_by_path.get(history_item.path.casefold())
+            if indexed is None:
+                continue
+            candidate_text = _git_file_snapshot(
+                resolved_root,
+                commit.commit,
+                history_item.path,
+                source_limit,
+            )
+            if not candidate_text:
+                continue
+            candidate_signals = _extract_reference_signals(
+                indexed.path,
+                candidate_text,
+                additional_source_suffixes,
+            )
+            related = [
+                (relation, profile)
+                for profile in profiles
+                if (
+                    relation := _candidate_relation(
+                        indexed,
+                        candidate_text,
+                        profile,
+                        candidate_signals,
+                    )
+                )
+                is not None
+                and relation.explicit
+            ]
+            if not related:
+                continue
+            related_anchor_paths = {
+                profile.change.path.casefold() for _relation, profile in related
+            }
+            multi_anchor_relation = len(related_anchor_paths) >= 2
+            relation, profile = max(
+                related,
+                key=lambda row: (row[0].score, row[0].anchor_path.casefold()),
+            )
+            diff = _git_selected_commit_diff(
+                resolved_root,
+                commit.commit,
+                history_item.path,
+                12000,
+            )
+            changed_diff = _changed_diff_lines(diff)
+            changed_hunks = _changed_diff_hunks(diff)
+            diff_key = changed_diff.casefold()
+            hunk_key = changed_hunks.casefold()
+            candidate_signal_values = {
+                signal.value.casefold() for signal in candidate_signals
+            }
+            anchor_values = {
+                _logical_stem(profile.path, additional_source_suffixes).casefold(),
+                *(
+                    signal.value.casefold()
+                    for signal in profile.signals
+                    if signal.kind in EXPLICIT_REFERENCE_KINDS
+                    and signal.value.casefold() in candidate_signal_values
+                ),
+            }
+            changed_line_anchor_hit = any(
+                len(value) >= 3 and value in diff_key for value in anchor_values
+            )
+            hunk_anchor_hit = any(
+                len(value) >= 3 and value in hunk_key for value in anchor_values
+            )
+            diff_anchor_hit = changed_line_anchor_hit or hunk_anchor_hit
+            shared_tokens = (
+                _recovery_path_tokens(history_item.path)
+                & _recovery_path_tokens(profile.change.path)
+            )
+            query_similarity = _evidence_similarity(
+                query,
+                "\n".join((commit.subject, changed_diff)),
+            )
+            evidence_tokens = set(
+                _scope_tokens("\n".join((commit.subject, changed_diff)))
+            )
+            low_value_only = bool(
+                evidence_tokens & SCOPE_RECOVERY_LOW_VALUE_TERMS
+            ) and not diff_anchor_hit
+            subject_similarity = max(
+                (_text_similarity(commit.subject, subject) for subject in anchor_subjects),
+                default=0.0,
+            )
+
+            same_commit_supported = same_commit and bool(
+                diff_anchor_hit or shared_tokens or query_similarity >= 0.10
+            )
+            nearby_supported = (
+                not same_commit
+                and distance <= cluster_days
+                and (
+                    (
+                        diff_anchor_hit
+                        and (
+                            (
+                                subject_similarity >= 0.58
+                                and (
+                                    query_similarity >= 0.08
+                                    or bool(shared_tokens)
+                                )
+                            )
+                            or (
+                                query_similarity >= 0.12
+                                and (
+                                    bool(shared_tokens)
+                                    or relation.score >= 60
+                                )
+                            )
+                            or (
+                                multi_anchor_relation
+                                and distance <= min(cluster_days, 5)
+                                and bool(shared_tokens)
+                                and not low_value_only
+                            )
+                        )
+                    )
+                    or (
+                        # When the user explicitly listed only a subset of files,
+                        # a directly referencing file with a real, non-maintenance
+                        # logic change is the omission pattern this recovery is
+                        # meant to cover.  This broader branch is never used for
+                        # an explicit commit boundary or a pathless date guess.
+                        bool(manual_seeds)
+                        and bool(changed_diff.strip())
+                        and relation.score >= 60
+                        and not low_value_only
+                        and (
+                            diff_anchor_hit
+                            or (
+                                multi_anchor_relation
+                                and distance <= min(cluster_days, 5)
+                                and bool(shared_tokens)
+                            )
+                        )
+                    )
+                    or (
+                        # With pathless, vague input, references to several
+                        # independently selected anchors are stronger than a
+                        # filename or package-token coincidence.  This keeps the
+                        # Service/consumer omission case recoverable without
+                        # admitting single-edge neighbours.
+                        not manual_seeds
+                        and multi_anchor_relation
+                        and bool(changed_diff.strip())
+                        and distance <= min(cluster_days, 5)
+                        and bool(shared_tokens)
+                        and relation.score >= 60
+                        and not low_value_only
+                    )
+                )
+            )
+            if not (same_commit_supported or nearby_supported):
+                continue
+
+            score = min(
+                100,
+                62
+                + (24 if same_commit else max(4, 18 - distance * 2))
+                + (20 if diff_anchor_hit else 0)
+                + (12 if multi_anchor_relation else 0)
+                + (10 if shared_tokens else 0)
+                + (8 if query_similarity >= 0.20 else 0),
+            )
+            authored = _commit_date(commit.authored_at)
+            outside = not _is_date_inside(authored, date_from, date_to)
+            evidence_parts = [
+                f"명시적 참조: {relation.anchor_path}",
+                "같은 커밋" if same_commit else f"변경 시점 {distance}일 이내",
+            ]
+            if diff_anchor_hit:
+                evidence_parts.append(
+                    "diff 실제 변경 행에서 참조 식별자 확인"
+                    if changed_line_anchor_hit
+                    else "diff에서 참조 식별자 확인(변경 hunk)"
+                )
+            if multi_anchor_relation:
+                evidence_parts.append(
+                    f"입력 파일 {len(related_anchor_paths)}개를 직접 참조"
+                )
+            if shared_tokens:
+                evidence_parts.append(
+                    "공통 업무 식별자 " + ", ".join(sorted(shared_tokens)[:3])
+                )
+            if query_similarity >= 0.12:
+                evidence_parts.append(f"입력 근거 유사도 {query_similarity:.2f}")
+            root_recovered.append(
+                ChangeItem(
+                    root=str(resolved_root),
+                    path=history_item.path,
+                    change_type=history_item.change_type,
+                    source="git-related-recovery",
+                    exists=indexed.path.exists(),
+                    modified_at=_modified_iso(indexed.path),
+                    note=(
+                        f"입력 날짜 범위 밖의 Git 변경을 고신뢰 관계로 복구"
+                        if outside
+                        else "선택 범위에서 누락된 Git 변경을 고신뢰 관계로 복구"
+                    ),
+                    commit=commit.commit,
+                    relevance_score=score,
+                    selection_reason="; ".join(evidence_parts),
+                )
+            )
+
+        root_recovered = sorted(
+            _merge_changes(root_recovered),
+            key=lambda item: (
+                -item.relevance_score,
+                item.path.casefold(),
+            ),
+        )
+        recovered_by_repository.setdefault(repository_key, []).extend(root_recovered)
+        if root_recovered:
+            _log(
+                log,
+                "SCOPE-RECOVERY",
+                f"{resolved_root.name}: 확장 후보 {len(rows_by_path)}개 중 "
+                f"고신뢰 Git 변경 후보 {len(root_recovered)}개 확인",
+            )
+        else:
+            _log(
+                log,
+                "SCOPE-RECOVERY",
+                f"{resolved_root.name}: 확장 후보 {len(rows_by_path)}개를 확인했지만 "
+                "자동 승격 기준을 만족한 파일은 없음",
+            )
+
+    recovered: list[ChangeItem] = []
+    for repository_key, repository_rows in recovered_by_repository.items():
+        existing_recovery_count = len(
+            existing_recovery_by_repository.get(repository_key, set())
+        )
+        remaining_budget = max(0, max_recovered - existing_recovery_count)
+        ranked = sorted(
+            _merge_changes(repository_rows),
+            key=lambda item: (
+                -item.relevance_score,
+                item.root.casefold(),
+                item.path.casefold(),
+            ),
+        )
+        selected: list[ChangeItem] = []
+        if remaining_budget == 0:
+            if ranked:
+                _log(
+                    log,
+                    "SCOPE-RECOVERY",
+                    f"{repository_labels.get(repository_key, 'Git 저장소')}: "
+                    f"앞 단계에서 저장소 전체 보완 한도 {max_recovered}개를 사용해 "
+                    f"추가 후보 {len(ranked)}개의 승격을 생략",
+                )
+            continue
+        scores = sorted(
+            {item.relevance_score for item in ranked},
+            reverse=True,
+        )
+        for score in scores:
+            buckets: dict[str, list[ChangeItem]] = {}
+            for item in ranked:
+                if item.relevance_score != score:
+                    continue
+                buckets.setdefault(item.root.casefold(), []).append(item)
+            while buckets and len(selected) < remaining_budget:
+                for root_key in sorted(tuple(buckets)):
+                    bucket = buckets[root_key]
+                    selected.append(bucket.pop(0))
+                    if not bucket:
+                        del buckets[root_key]
+                    if len(selected) >= remaining_budget:
+                        break
+            if len(selected) >= remaining_budget:
+                break
+        recovered.extend(selected)
+        if len(ranked) > len(selected):
+            _log(
+                log,
+                "SCOPE-RECOVERY",
+                f"{repository_labels.get(repository_key, 'Git 저장소')}: "
+                f"고신뢰 후보 {len(ranked)}개 중 기존 보완 "
+                f"{existing_recovery_count}개를 포함한 저장소 전체 한도 "
+                f"{max_recovered}개까지만 승격",
+            )
+        for item in selected:
+            _log(
+                log,
+                "SCOPE-RECOVERY",
+                f"{item.path} ({item.relevance_score}점) | {item.selection_reason}",
+            )
+
+    return sorted(
+        _merge_changes(recovered),
+        key=lambda item: (item.root.casefold(), item.path.casefold()),
+    )
+
+
 def _select_related_candidates(
     rows: list[RelatedCandidate],
     profiles: list[ChangedProfile],
@@ -3047,15 +4587,20 @@ def _compose_changed_excerpt(
             modes.append("diff")
             truncated = truncated or was_truncated
     if source and remaining > 100:
+        source_label = (
+            "[선택 커밋 소스]"
+            if change.source == "git-explicit-commit"
+            else "[현재 소스]"
+        )
         excerpt = _focused_excerpt(
             source,
             terms,
-            remaining - len("[현재 소스]\n"),
+            remaining - len(source_label + "\n"),
             priority_terms,
         )
         was_truncated = len(source) > len(excerpt)
         if excerpt:
-            blocks.append("[현재 소스]\n" + excerpt)
+            blocks.append(source_label + "\n" + excerpt)
             modes.append("full" if not was_truncated else "focused")
             truncated = truncated or was_truncated
     elif source:
@@ -3095,8 +4640,15 @@ def build_scan_bundle(
     if not changes:
         raise ValueError("변경 파일을 찾지 못했습니다. 날짜, Git Diff 또는 수동 목록을 확인해 주세요.")
 
+    explicit_commit_scope = all(
+        change.source == "git-explicit-commit" for change in changes
+    )
     max_changed = max(400, int(scanner_settings.get("maxChangedFileChars", 24000)))
-    configured_related = max(0, int(scanner_settings.get("maxRelatedFiles", 12)))
+    configured_related = (
+        0
+        if explicit_commit_scope
+        else max(0, int(scanner_settings.get("maxRelatedFiles", 12)))
+    )
     adaptive_related = max(4, len(changes) * 2)
     max_related = 0 if configured_related == 0 else min(configured_related, adaptive_related)
     max_related_chars = max(300, int(scanner_settings.get("maxRelatedFileChars", 7000)))
@@ -3107,6 +4659,52 @@ def build_scan_bundle(
     )
     max_context = min(configured_context, adaptive_context)
     max_diff_chars = max(500, int(scanner_settings.get("maxDiffChars", 16000)))
+    max_detailed_changes = max(
+        8,
+        min(500, int(scanner_settings.get("maxDetailedChangedFiles", 120))),
+    )
+    focus_term_keys = {term.casefold() for term in focus_terms}
+    detailed_priority_by_id = {
+        id(item): (
+            -item.relevance_score,
+            -len(focus_term_keys & set(_scope_tokens(item.path))),
+            Path(item.path).suffix.casefold() == ".md",
+        )
+        for item in changes
+    }
+
+    def detailed_priority(item: ChangeItem) -> tuple[int, int, bool]:
+        return detailed_priority_by_id[id(item)]
+
+    detailed_ranked = sorted(
+        changes,
+        key=lambda item: (
+            *detailed_priority(item),
+            item.root.casefold(),
+            item.path.casefold(),
+        ),
+    )
+    detailed_selected: list[ChangeItem] = []
+    for priority in sorted({detailed_priority(item) for item in detailed_ranked}):
+        buckets: dict[str, list[ChangeItem]] = {}
+        for item in detailed_ranked:
+            if detailed_priority(item) == priority:
+                buckets.setdefault(item.root.casefold(), []).append(item)
+        while buckets and len(detailed_selected) < max_detailed_changes:
+            for root_key in sorted(tuple(buckets)):
+                bucket = buckets[root_key]
+                detailed_selected.append(bucket.pop(0))
+                if not bucket:
+                    del buckets[root_key]
+                if len(detailed_selected) >= max_detailed_changes:
+                    break
+        if len(detailed_selected) >= max_detailed_changes:
+            break
+    detailed_change_keys = {item.key() for item in detailed_selected}
+    if len(changes) > len(detailed_change_keys):
+        warnings_detail_omitted = len(changes) - len(detailed_change_keys)
+    else:
+        warnings_detail_omitted = 0
     max_content_scan_files = max(0, int(scanner_settings.get("maxContentScanFiles", 2500)))
     max_source_scan_chars = max(
         max_changed,
@@ -3115,6 +4713,14 @@ def build_scan_bundle(
 
     contexts: list[ContextFile] = []
     warnings: list[str] = []
+    recovered_changes = [
+        change for change in changes if change.source == "git-related-recovery"
+    ]
+    if recovered_changes:
+        warnings.append(
+            f"입력 범위에서 빠졌을 가능성이 높은 실제 Git 변경 "
+            f"{len(recovered_changes)}개를 참조 관계와 변경 시점 근거로 복구했습니다."
+        )
     changed_keys = {item.key() for item in changes}
     changed_physical_keys = {
         str((Path(item.root) / Path(item.path)).resolve(strict=False)).casefold()
@@ -3127,7 +4733,35 @@ def build_scan_bundle(
         root = Path(change.root)
         path = root / change.path
         source = ""
-        if (
+        sensitive_body = _change_touches_sensitive_path(change)
+        detailed = change.key() in detailed_change_keys
+        if not detailed:
+            source = ""
+        elif sensitive_body:
+            warnings.append(
+                f"{change.path}는 민감정보 파일 규칙으로 본문과 Git diff를 제외했습니다."
+            )
+        elif (
+            change.source == "git-explicit-commit"
+            and change.commit
+            and _is_allowed_file(path, additional_source_suffixes)
+        ):
+            source = _git_file_snapshot(
+                root,
+                change.commit,
+                change.path,
+                max_source_scan_chars,
+            )
+            if not source and change.change_type != "삭제":
+                warnings.append(
+                    f"{change.path} 선택 커밋 소스는 없거나 크기 제한을 초과해 "
+                    "본문을 제외하고 Git diff와 메타데이터만 사용합니다."
+                )
+            if len(source) >= max_source_scan_chars:
+                warnings.append(
+                    f"{change.path} 선택 커밋 소스 탐색이 문자 상한에서 잘렸습니다."
+                )
+        elif (
             change.exists
             and path.exists()
             and _is_allowed_file(path, additional_source_suffixes)
@@ -3197,8 +4831,12 @@ def build_scan_bundle(
         fair_share = max(120, remaining_changed // max(1, files_left))
         budget = min(max_changed + max_diff_chars, fair_share)
         diff = ""
-        if git_root_cache.get(str(root.resolve()).casefold(), False):
-            if change.source == "git-history" and change.commit:
+        if (
+            change.key() in detailed_change_keys
+            and not _change_touches_sensitive_path(change)
+            and git_root_cache.get(str(root.resolve()).casefold(), False)
+        ):
+            if change.commit:
                 diff = _git_selected_commit_diff(
                     root,
                     change.commit,
@@ -3265,7 +4903,8 @@ def build_scan_bundle(
 
     content_scans = 0
     candidate_physical_keys: set[str] = set()
-    for root_text, project_index in indexes.items():
+    related_indexes = {} if explicit_commit_scope else indexes
+    for root_text, project_index in related_indexes.items():
         for candidate in project_index:
             key = (root_text.casefold(), candidate.relative_path.casefold())
             physical_key = str(candidate.path.resolve(strict=False)).casefold()
@@ -3489,6 +5128,11 @@ def build_scan_bundle(
 
     if changed_truncated:
         warnings.append(f"변경 파일 {changed_truncated}개의 근거가 컨텍스트 예산에 맞게 축약되었습니다.")
+    if warnings_detail_omitted:
+        warnings.append(
+            f"확정 변경 {warnings_detail_omitted}개는 manifest에 유지하고 "
+            "본문·diff 상세 근거만 처리 한도에 따라 생략했습니다."
+        )
     low_confidence = [
         item
         for item in changes

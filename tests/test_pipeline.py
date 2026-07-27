@@ -69,6 +69,52 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(any("Alert 처리" in source for source in sources))
         self.assertFalse(any("권한" in source for source in sources))
 
+    def test_explicit_commit_quality_sources_exclude_unchanged_current_source(self):
+        root = str(FIXTURE_ROOT.resolve())
+        bundle = ScanBundle(
+            changes=[
+                ChangeItem(
+                    root,
+                    "src/service/FeatureService.java",
+                    "변경",
+                    "git-explicit-commit",
+                    True,
+                    commit="1234567890abcdef1234567890abcdef12345678",
+                    relevance_score=100,
+                )
+            ],
+            contexts=[
+                ContextFile(
+                    root,
+                    "src/service/FeatureService.java",
+                    "diff+full",
+                    "explicit commit evidence",
+                    1000,
+                    (
+                        "[Git diff]\n"
+                        "[commit 12345678]\n"
+                        "@@ -1 +1 @@\n"
+                        "-oldPermissionGate();\n"
+                        "+releasePermissionGate();\n\n"
+                        "[현재 소스]\n"
+                        "class FeatureService {\n"
+                        "  void releasePermissionGate() {}\n"
+                        "  void legacyPayrollRecalculationBehavior() {}\n"
+                        "}\n"
+                    ),
+                )
+            ],
+        )
+        request = (
+            "release permission gate behavior\n"
+            "legacy payroll recalculation behavior"
+        )
+
+        sources = _quality_sources_for_bundle(request, bundle)
+
+        self.assertIn("release permission gate behavior", sources)
+        self.assertNotIn("legacy payroll recalculation behavior", sources)
+
     def test_pipeline_rejects_incomplete_or_reversed_date_range_before_creating_a_run(self):
         settings = deepcopy(load_settings())
         settings["runDirectory"] = str(TEMP_ROOT / "invalid-date-range" / "runs")

@@ -480,7 +480,15 @@ def _quality_sources_for_bundle(request_text: str, bundle: Any) -> list[str]:
             continue
         excerpt = context.excerpt
         if change.source == "git-history" and "[Git diff]" in excerpt:
-            excerpt = excerpt.split("[Git diff]", 1)[1].split("[현재 소스]", 1)[0]
+            excerpt = excerpt.split("[Git diff]", 1)[1]
+        if (
+            change.source in {"git-history", "git-explicit-commit"}
+            and "[현재 소스]" in excerpt
+        ):
+            # Historical evidence must never be broadened by whatever happens
+            # to be checked out now. Explicit bundles normally contain a
+            # [선택 커밋 소스] block, but keep this guard for old/run fixtures.
+            excerpt = excerpt.split("[현재 소스]", 1)[0]
         evidence_parts.append(f"{context.path}\n{excerpt}")
     evidence = "\n".join(evidence_parts).casefold()
     evidence_tokens = set(_quality_source_tokens(evidence))
