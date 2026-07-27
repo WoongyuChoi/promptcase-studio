@@ -396,6 +396,50 @@ class ExplicitCommitScopeTests(unittest.TestCase):
         self.assertNotIn(old_related.resolve(), _absolute_paths(changes))
         self.assertEqual({item.commit for item in changes}, {target_commit})
 
+    def test_high_confidence_single_commit_without_prefix_does_not_expand_history(self):
+        repository = _create_repository()
+        root = repository / "src"
+        target = root / "permission" / "CanSaveRequest.ts"
+        old_related = root / "legacy" / "LegacyPermissionService.ts"
+
+        _write(repository, "src/app.ts", "export const app = true;\n")
+        _commit(repository, "initial project", "2026-07-01T09:00:00+09:00")
+        _write(
+            repository,
+            "src/legacy/LegacyPermissionService.ts",
+            "import type { CanSaveRequest } from '../permission/CanSaveRequest';\n"
+            "export const legacy = (value: CanSaveRequest) => value.allowed;\n",
+        )
+        _commit(
+            repository,
+            "feat: initialize permission infrastructure",
+            "2026-07-21T09:00:00+09:00",
+        )
+        _write(
+            repository,
+            "src/permission/CanSaveRequest.ts",
+            "export interface CanSaveRequest { allowed: boolean }\n",
+        )
+        target_commit = _commit(
+            repository,
+            "feat: implement backend canSave permission check",
+            "2026-07-23T09:00:00+09:00",
+        )
+
+        changes, _indexes, _excluded, _truncated = collect_changes(
+            [root],
+            "canSave permission backend implementation",
+            date(2026, 7, 22),
+            date(2026, 7, 27),
+            True,
+            _settings(),
+            request_text="Implement the backend canSave permission check.",
+        )
+
+        self.assertEqual(_absolute_paths(changes), {target.resolve()})
+        self.assertNotIn(old_related.resolve(), _absolute_paths(changes))
+        self.assertEqual({item.commit for item in changes}, {target_commit})
+
     def test_parser_supports_github_and_gitlab_commit_urls(self):
         github_commit = "0123456789abcdef0123456789abcdef01234567"
         gitlab_commit = "fedcba9876543210fedcba9876543210fedcba98"

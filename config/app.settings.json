@@ -59,6 +59,10 @@
     "scopeRecoveryMaxCandidateFiles": 160,
     "scopeRecoveryMaxFiles": 12,
     "scopeRecoverySemanticMinScore": 34,
+    "modifiedDateFocusMinCandidates": 8,
+    "modifiedDateFocusMinScore": 0.28,
+    "modifiedDateFocusRelativeScore": 0.65,
+    "modifiedDateFocusSourceChars": 60000,
     "maxContentScanFiles": 10000,
     "maxSourceScanChars": 320000
   },

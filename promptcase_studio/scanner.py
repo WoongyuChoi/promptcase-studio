@@ -1035,10 +1035,6 @@ LABELED_GIT_COMMIT_PATTERN = re.compile(
     r"(?i)(?:\bcommit\b|\bsha\b|커밋)\s*(?:[:：=]|is)?\s*"
     r"([0-9a-f]{7,40})(?![0-9a-f])"
 )
-CONVENTIONAL_COMMIT_SUBJECT_PATTERN = re.compile(
-    r"(?i)^\s*\[?\s*(?:feat|fix|refactor|perf|chore|docs|test|build|ci|revert)"
-    r"(?:\([^]\r\n:：]+\))?\s*[:：]"
-)
 SCOPE_GENERIC_TERMS = FOCUS_STOP_TERMS | {
     "api",
     "db",
@@ -1061,6 +1057,42 @@ SCOPE_GENERIC_TERMS = FOCUS_STOP_TERMS | {
     "처리",
     "프로젝트",
 }
+SCOPE_CONCEPT_GROUPS = (
+    frozenset(("저장", "save", "saved", "saving", "persist", "persistence")),
+    frozenset(
+        (
+            "변경",
+            "변경된",
+            "change",
+            "changed",
+            "changes",
+            "changing",
+            "dirty",
+            "edit",
+            "edited",
+            "modify",
+            "modified",
+            "update",
+            "updated",
+        )
+    ),
+    frozenset(("알림", "alert", "notice", "notification", "notify", "warning")),
+    frozenset(
+        (
+            "권한",
+            "auth",
+            "authorization",
+            "authorize",
+            "permission",
+            "permissions",
+        )
+    ),
+    frozenset(("삭제", "delete", "deleted", "remove", "removed")),
+    frozenset(("추가", "add", "added", "create", "created", "insert", "inserted")),
+    frozenset(("조회", "fetch", "load", "loaded", "query", "read", "search", "select")),
+    frozenset(("업로드", "upload", "uploaded", "import", "imported")),
+    frozenset(("다운로드", "download", "downloaded", "export", "exported")),
+)
 SCOPE_TOKEN_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_$.-]*|[0-9]+|[가-힣]{2,}")
 
 
@@ -1828,6 +1860,205 @@ def collect_date_changes(
     ]
 
 
+def _scope_tokens_related(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    for group in SCOPE_CONCEPT_GROUPS:
+        left_matches = any(
+            left == value
+            or (
+                re.fullmatch(r"[가-힣]+", value)
+                and len(value) >= 2
+                and left.startswith(value)
+            )
+            for value in group
+        )
+        if not left_matches:
+            continue
+        if any(
+            right == value
+            or (
+                re.fullmatch(r"[가-힣]+", value)
+                and len(value) >= 2
+                and right.startswith(value)
+            )
+            for value in group
+        ):
+            return True
+    if re.fullmatch(r"[a-z0-9_$.-]+", left) and re.fullmatch(
+        r"[a-z0-9_$.-]+", right
+    ):
+        return min(len(left), len(right)) >= 4 and (
+            left.startswith(right) or right.startswith(left)
+        )
+    if (
+        re.fullmatch(r"[가-힣]+", left)
+        and re.fullmatch(r"[가-힣]+", right)
+        and min(len(left), len(right)) >= 2
+    ):
+        return left.startswith(right[:2]) or right.startswith(left[:2])
+    return False
+
+
+def _localized_scope_relevance(query: str, path: str, source: str) -> float:
+    """Score nearby query evidence without rewarding tokens scattered across a file."""
+
+    query_tokens = set(_scope_tokens(query))
+    if not query_tokens:
+        return 0.0
+
+    lines = [path, *source.splitlines()]
+    token_rows = [set(_scope_tokens(line)) for line in lines]
+
+    def coverage(evidence_tokens: set[str]) -> float:
+        matched = sum(
+            any(
+                _scope_tokens_related(query_token, evidence_token)
+                for evidence_token in evidence_tokens
+            )
+            for query_token in query_tokens
+        )
+        return matched / len(query_tokens)
+
+    centers = [
+        index
+        for index, evidence_tokens in enumerate(token_rows)
+        if coverage(evidence_tokens) > 0
+    ]
+    best = 0.0
+    for center in centers[:240]:
+        start = max(0, center - 4)
+        end = min(len(lines), center + 5)
+        window_tokens = set().union(*token_rows[start:end])
+        window = "\n".join(lines[start:end])
+        best = max(
+            best,
+            coverage(window_tokens) * 0.6 + _text_similarity(query, window) * 0.4,
+        )
+
+    path_coverage = coverage(token_rows[0])
+    return min(1.0, best + path_coverage * 0.2)
+
+
+def _focus_modified_date_changes(
+    changes: list[ChangeItem],
+    indexes: dict[str, list[IndexedFile]],
+    query: str,
+    scanner_settings: dict[str, Any],
+    log: LogCallback | None,
+) -> list[ChangeItem]:
+    """Turn a broad mtime window into a bounded, query-supported change set.
+
+    Modification time is not historical change evidence.  When many files share
+    the selected dates, keep only files with concentrated evidence for the user's
+    change summary.  If the query or evidence is weak, retain the original set
+    instead of guessing.
+    """
+
+    minimum_candidates = max(
+        4,
+        min(100, int(scanner_settings.get("modifiedDateFocusMinCandidates", 8))),
+    )
+    if len(changes) < minimum_candidates:
+        return changes
+
+    query_tokens = set(_scope_tokens(query))
+    has_specific_identifier = any(
+        len(token) >= 4 and re.search(r"[a-z]", token) for token in query_tokens
+    )
+    if len(query_tokens) < 2 and not has_specific_identifier:
+        return changes
+
+    source_limit = max(
+        4000,
+        min(
+            120000,
+            int(scanner_settings.get("modifiedDateFocusSourceChars", 60000)),
+        ),
+    )
+    minimum_score = max(
+        0.15,
+        min(0.8, float(scanner_settings.get("modifiedDateFocusMinScore", 0.28))),
+    )
+    relative_floor = max(
+        0.4,
+        min(0.95, float(scanner_settings.get("modifiedDateFocusRelativeScore", 0.65))),
+    )
+    indexed_by_key = {
+        (str(item.root.resolve()).casefold(), item.relative_path.casefold()): item
+        for root_index in indexes.values()
+        for item in root_index
+    }
+    ranked: list[tuple[float, ChangeItem]] = []
+    for change in changes:
+        key = (
+            str(Path(change.root).resolve()).casefold(),
+            change.path.replace("\\", "/").casefold(),
+        )
+        indexed = indexed_by_key.get(key)
+        if indexed is None or not indexed.path.is_file():
+            continue
+        try:
+            source = _read_text(indexed.path, source_limit)
+        except OSError:
+            continue
+        ranked.append(
+            (
+                _localized_scope_relevance(query, change.path, source),
+                change,
+            )
+        )
+
+    if not ranked:
+        return changes
+    best_score = max(score for score, _change in ranked)
+    if best_score < minimum_score:
+        _log(
+            log,
+            "DATE-SCOPE",
+            f"수정일 후보 {len(changes)}개의 입력 일치도가 낮아 "
+            "의미 기반 축소를 적용하지 않음",
+        )
+        return changes
+
+    cutoff = max(minimum_score, best_score * relative_floor)
+    selected: list[ChangeItem] = []
+    for score, change in sorted(
+        ranked,
+        key=lambda row: (
+            -row[0],
+            row[1].root.casefold(),
+            row[1].path.casefold(),
+        ),
+    ):
+        if score < cutoff:
+            continue
+        change.relevance_score = max(change.relevance_score, round(score * 100))
+        change.selection_reason = (
+            f"수정일 후보 입력 근거 일치 {round(score * 100)}점 "
+            f"(선택 기준 {round(cutoff * 100)}점)"
+        )
+        selected.append(change)
+
+    if not selected or len(selected) >= len(changes):
+        return changes
+
+    _log(
+        log,
+        "DATE-SCOPE",
+        f"수정일 후보 {len(changes)}개 중 입력 근거가 집중된 "
+        f"{len(selected)}개를 변경 범위로 선택하고 "
+        f"{len(changes) - len(selected)}개는 확정 변경에서 제외",
+    )
+    for change in selected[:12]:
+        _log(
+            log,
+            "DATE-SCOPE",
+            f"{change.path} | {change.selection_reason}",
+        )
+    return selected
+
+
 def _manual_line(raw_line: str) -> tuple[tuple[str, str] | None, str | None]:
     pattern = re.compile(
         r"^(신규|추가|수정|변경|삭제|이름변경|A|M|D|R)\s*(?:[:：|\t]|\s+-\s+|\s+)\s*(.+)$",
@@ -2223,6 +2454,7 @@ def collect_changes(
         scanner_settings.get("additionalSourceSuffixes")
     )
     all_changes: list[ChangeItem] = []
+    date_scope_changes: list[ChangeItem] = []
     git_scope_changes: list[ChangeItem] = []
     indexes: dict[str, list[IndexedFile]] = {}
     excluded_total = 0
@@ -2280,7 +2512,7 @@ def collect_changes(
         # a valid Git history reintroduces every touched/generated file.
         if (date_from or date_to) and not git_available and not explicit_commit_refs:
             date_changes = collect_date_changes(index, date_from, date_to)
-            all_changes.extend(date_changes)
+            date_scope_changes.extend(date_changes)
             range_label = (
                 f"{date_from.isoformat() if date_from else '처음'}부터 "
                 f"{date_to.isoformat() if date_to else '현재'}까지"
@@ -2310,6 +2542,17 @@ def collect_changes(
         manual_records,
         log,
     )
+    if date_scope_changes:
+        primary_scope_query = "\n".join(change_notes).strip() or request_text.strip()
+        all_changes.extend(
+            _focus_modified_date_changes(
+                date_scope_changes,
+                indexes,
+                primary_scope_query,
+                scanner_settings,
+                log,
+            )
+        )
     if git_scope_changes and (change_notes or request_text.strip()):
         working_tree = [
             item for item in git_scope_changes if item.source == "git-working-tree"
@@ -2374,6 +2617,7 @@ def collect_changes(
     merged_changes = _merge_changes(all_changes)
     if include_git and (date_from or date_to):
         recovery_query = "\n".join((*change_notes, request_text))
+        strong_semantic_commit_scope = False
         has_working_tree = any(
             change.source == "git-working-tree" for change in merged_changes
         )
@@ -2401,6 +2645,10 @@ def collect_changes(
                 log,
             )
             if semantic_seeds:
+                strong_semantic_commit_scope = all(
+                    "커밋 문안·diff 직접 일치" in change.selection_reason
+                    for change in semantic_seeds
+                )
                 merged_changes = _merge_changes(
                     [
                         *[
@@ -2418,22 +2666,35 @@ def collect_changes(
             for commit in change.commit.split(",")
             if commit.strip()
         }
-        commit_subject_scope = (
+        strong_single_commit_scope = (
             not manual_changes
             and not has_working_tree
             and len(selected_history_commits) == 1
             and best_history_score >= 35
-            and any(
-                CONVENTIONAL_COMMIT_SUBJECT_PATTERN.match(note)
-                for note in change_notes
-            )
         )
-        if commit_subject_scope:
+        if strong_semantic_commit_scope:
+            semantic_commit = next(
+                (
+                    commit.strip()
+                    for change in merged_changes
+                    for commit in change.commit.split(",")
+                    if commit.strip()
+                ),
+                "",
+            )
+            _log(
+                log,
+                "SCOPE",
+                f"날짜 밖에서 입력 문안과 직접 일치하는 커밋 "
+                f"{semantic_commit[:8]}을 확정 범위로 사용해 "
+                "주변 커밋의 관계 확장을 생략합니다",
+            )
+        elif strong_single_commit_scope:
             selected_commit = next(iter(selected_history_commits))
             _log(
                 log,
                 "SCOPE",
-                f"커밋 제목 형식과 일치하는 단일 커밋 {selected_commit[:8]}을 "
+                f"입력과 일치하는 고신뢰 단일 커밋 {selected_commit[:8]}을 "
                 "확정 범위로 사용해 "
                 "인접 날짜의 변경 자동 승격을 생략합니다",
             )
@@ -3644,6 +3905,7 @@ def _recover_semantic_git_seeds(
     """Find one coherent multi-file commit when both paths and dates are vague."""
 
     query = "\n".join((*change_notes, request_text))
+    primary_query = "\n".join(change_notes).strip() or request_text.strip()
     query_tokens = set(
         _scope_tokens(re.sub(r"\.[A-Za-z0-9_+-]{1,16}\b", "", query))
     )
@@ -3719,7 +3981,7 @@ def _recover_semantic_git_seeds(
             ).append(commit)
 
     ranked_groups: list[
-        tuple[int, GitCommitCandidate, list[tuple[int, ChangeItem]]]
+        tuple[int, GitCommitCandidate, list[tuple[int, ChangeItem]], bool]
     ] = []
     for candidates in grouped_candidates.values():
         changes = _merge_changes(
@@ -3754,9 +4016,6 @@ def _recover_semantic_git_seeds(
             max(family_counts.values(), default=0),
             max(path_token_counts.values(), default=0),
         )
-        if len(direct_matches) < 2 or coherent_count < 2:
-            continue
-
         representative = max(
             candidates,
             key=lambda candidate: (
@@ -3773,6 +4032,25 @@ def _recover_semantic_git_seeds(
         new_count = sum(change.change_type == "신규" for change in changes)
         if initial_like and new_count * 5 >= len(changes) * 4:
             continue
+        subject_similarity = _text_similarity(primary_query, representative.subject)
+        evidence_similarity = max(
+            (
+                _evidence_similarity(primary_query, candidate.evidence)
+                for candidate in candidates
+                if candidate.evidence
+            ),
+            default=0.0,
+        )
+        strong_text_match = max(candidate.score for candidate in candidates) >= 45 and (
+            subject_similarity >= 0.55 or evidence_similarity >= 0.50
+        )
+        if (len(direct_matches) < 2 or coherent_count < 2) and not strong_text_match:
+            continue
+        if strong_text_match and len(direct_matches) < 2:
+            # A strongly matching commit title/diff is itself a coherent local
+            # change boundary. Keep every path under the selected roots even
+            # when user wording such as "Alert 처리" does not appear in names.
+            direct_matches = [(0, change) for change in changes]
         low_value_penalty = (
             12 if subject_tokens & SCOPE_RECOVERY_LOW_VALUE_TERMS else 0
         )
@@ -3781,6 +4059,7 @@ def _recover_semantic_git_seeds(
             + min(18, len(changes) * 3)
             + min(18, len(direct_matches) * 6)
             + min(14, coherent_count * 3)
+            + (20 if strong_text_match else 0)
             - low_value_penalty
         )
         combined = GitCommitCandidate(
@@ -3790,7 +4069,9 @@ def _recover_semantic_git_seeds(
             changes,
             score=max(candidate.score for candidate in candidates),
         )
-        ranked_groups.append((semantic_score, combined, direct_matches))
+        ranked_groups.append(
+            (semantic_score, combined, direct_matches, strong_text_match)
+        )
 
     if not ranked_groups:
         return []
@@ -3802,7 +4083,7 @@ def _recover_semantic_git_seeds(
         ),
         reverse=True,
     )
-    best_score, best_commit, direct_matches = ranked_groups[0]
+    best_score, best_commit, direct_matches, strong_text_match = ranked_groups[0]
     if best_score < minimum:
         _log(
             log,
@@ -3864,14 +4145,19 @@ def _recover_semantic_git_seeds(
                 ),
             )
         )
+        reason_prefix = (
+            f"커밋 문안·diff 직접 일치 {best_score}점; "
+            if strong_text_match
+            else f"다중 파일 변경 군집 {best_score}점; "
+        )
         change.selection_reason = (
-            f"다중 파일 변경 군집 {best_score}점; "
-            f"커밋 {best_commit.commit[:8]} | {best_commit.subject}"
+            reason_prefix + f"커밋 {best_commit.commit[:8]} | {best_commit.subject}"
         )
     _log(
         log,
         "SCOPE-RECOVERY",
-        f"경로 없는 입력에서 응집된 Git 커밋 {best_commit.commit[:8]} "
+        f"경로 없는 입력에서 {'문안이 직접 일치하는' if strong_text_match else '응집된'} "
+        f"Git 커밋 {best_commit.commit[:8]} "
         f"{len(selected)}개 파일을 보완 앵커로 선택 ({best_score}점)",
     )
     return selected
@@ -4733,6 +5019,11 @@ def build_scan_bundle(
 
     contexts: list[ContextFile] = []
     warnings: list[str] = []
+    focused_date_changes = [
+        change
+        for change in changes
+        if change.source == "modified-date" and change.relevance_score > 0
+    ]
     if not include_git:
         warnings.append(
             "Git 변경 수집이 꺼져 있어 파일 수정일과 수동 변경 경로를 사용했습니다. "
@@ -4750,6 +5041,12 @@ def build_scan_bundle(
                 + ", ".join(non_git_roots)
                 + ". 삭제 파일은 자동 감지되지 않습니다."
             )
+    if focused_date_changes:
+        warnings.append(
+            f"수정일 후보가 많아 변경 입력과 근거가 집중된 "
+            f"{len(focused_date_changes)}개만 확정 변경으로 선택했습니다. "
+            "그 밖의 파일은 실제 변경으로 단정하지 않고 연관 문맥에서만 검토합니다."
+        )
     recovered_changes = [
         change for change in changes if change.source == "git-related-recovery"
     ]
@@ -5015,6 +5312,22 @@ def build_scan_bundle(
                     continue
                 if profile.change.root.casefold() != root_text.casefold() and not relation.explicit:
                     continue
+                if (
+                    relation.explicit
+                    and profile.change.source == "modified-date"
+                    and profile.change.relevance_score > 0
+                ):
+                    scope_query = "\n".join(change_notes).strip() or request_text.strip()
+                    scope_relevance = _localized_scope_relevance(
+                        scope_query,
+                        candidate.relative_path,
+                        content,
+                    )
+                    if scope_relevance >= 0.18:
+                        relation.score += round(scope_relevance * 600)
+                        relation.reason += (
+                            f"; 입력 변경 근거와 지역 일치 {round(scope_relevance * 100)}점"
+                        )
                 previous = related_rows_by_path.get(key)
                 if previous is None or relation.score > previous.score:
                     related_rows_by_path[key] = relation

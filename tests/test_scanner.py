@@ -102,6 +102,99 @@ class ScannerTests(unittest.TestCase):
         self.assertFalse(bundle.changes[0].exists)
         self.assertEqual(bundle.changes[0].source, "manual")
 
+    def test_non_git_mode_focuses_large_mtime_set_using_change_summary(self):
+        with workspace_temporary_directory() as directory:
+            root = Path(directory)
+            relevant_paths = {
+                "src/pages/PlanMap.tsx",
+                "src/pages/CompanyPlanMap.tsx",
+            }
+            for relative_path in relevant_paths:
+                source = root / relative_path
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text(
+                    "import { hasPlanChanges } from '../utils/planSavePayload';\n"
+                    "const title = '변경된 사항이 없습니다.';\n"
+                    "const icon = 'Alert';\n",
+                    encoding="utf-8",
+                )
+            related = root / "src" / "utils" / "planSavePayload.ts"
+            related.parent.mkdir(parents=True, exist_ok=True)
+            related.write_text(
+                "export const hasPlanChanges = (before: object, after: object) => "
+                "JSON.stringify(before) !== JSON.stringify(after);\n",
+                encoding="utf-8",
+            )
+            for index in range(21):
+                noise = root / "src" / "unrelated" / f"Permission{index:02d}.ts"
+                noise.parent.mkdir(parents=True, exist_ok=True)
+                noise.write_text(
+                    f"export const permission{index:02d} = true;\n",
+                    encoding="utf-8",
+                )
+
+            inside = datetime(2026, 7, 22, 12, 0).timestamp()
+            outside = datetime(2026, 7, 21, 12, 0).timestamp()
+            for path in root.rglob("*"):
+                if path.is_file():
+                    os.utime(
+                        path,
+                        (outside, outside) if path == related else (inside, inside),
+                    )
+            logs: list[tuple[str, str]] = []
+
+            bundle = build_scan_bundle(
+                [root],
+                "저장 시 변경된 사항이 없으면 Alert 처리",
+                date(2026, 7, 22),
+                date(2026, 7, 22),
+                False,
+                {
+                    "maxCandidateFiles": 100,
+                    "maxRelatedFiles": 8,
+                    "modifiedDateFocusMinCandidates": 8,
+                },
+                lambda level, message: logs.append((level, message)),
+            )
+
+        self.assertEqual({item.path for item in bundle.changes}, relevant_paths)
+        self.assertTrue(all(item.relevance_score >= 28 for item in bundle.changes))
+        self.assertIn(
+            "src/utils/planSavePayload.ts",
+            {item.path for item in bundle.contexts},
+        )
+        self.assertTrue(
+            any(
+                level == "DATE-SCOPE" and "21개는 확정 변경에서 제외" in message
+                for level, message in logs
+            )
+        )
+
+    def test_non_git_mode_keeps_full_mtime_set_when_summary_is_not_specific(self):
+        with workspace_temporary_directory() as directory:
+            root = Path(directory)
+            modified = datetime(2026, 7, 22, 12, 0).timestamp()
+            for index in range(10):
+                source = root / "src" / f"Module{index:02d}.py"
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text(f"VALUE = {index}\n", encoding="utf-8")
+                os.utime(source, (modified, modified))
+
+            bundle = build_scan_bundle(
+                [root],
+                "",
+                date(2026, 7, 22),
+                date(2026, 7, 22),
+                False,
+                {
+                    "maxCandidateFiles": 100,
+                    "maxRelatedFiles": 2,
+                    "modifiedDateFocusMinCandidates": 8,
+                },
+            )
+
+        self.assertEqual(len(bundle.changes), 10)
+
     def test_korean_ngram_similarity_tolerates_spacing_and_partial_wording(self):
         query = "저장시 변경사항 없으면 알림"
         matching = "feat: 저장 시 변경된 사항이 없으면 Alert 처리"

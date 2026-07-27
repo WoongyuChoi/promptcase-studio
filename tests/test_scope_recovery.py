@@ -354,6 +354,73 @@ class ScopeRecoveryTests(unittest.TestCase):
             all("다중 파일 변경 군집" in item.selection_reason for item in by_path.values())
         )
 
+    def test_pathless_subject_match_recovers_commit_when_paths_have_no_query_words(self):
+        repository = _create_repository()
+        page_path = "src/pages/MKPIM1110.tsx"
+        company_page_path = "src/pages/MKPIM1111.tsx"
+        utility_path = "src/utils/kpiMapSavePayload.ts"
+        unrelated_path = "src/legacy/LegacyKpiMap.ts"
+        _write(repository, "src/app.ts", "export const app = true;\n")
+        _commit(repository, "initialize sample project", "2026-07-01T09:00:00+09:00")
+        _write(
+            repository,
+            unrelated_path,
+            "import { MKPIM1110 } from '../pages/MKPIM1110';\n"
+            "import { MKPIM1111 } from '../pages/MKPIM1111';\n"
+            "export const legacy = [MKPIM1110, MKPIM1111];\n",
+        )
+        _commit(
+            repository,
+            "refactor: legacy KPI map wiring",
+            "2026-07-21T10:00:00+09:00",
+        )
+        for path in (page_path, company_page_path):
+            _write(
+                repository,
+                path,
+                "import { hasKpiMapSaveChanges } from '../utils/kpiMapSavePayload';\n"
+                "if (!hasKpiMapSaveChanges()) alert('변경된 사항이 없습니다.');\n",
+            )
+        _write(
+            repository,
+            utility_path,
+            "export const hasKpiMapSaveChanges = () => false;\n",
+        )
+        _commit(
+            repository,
+            "feat: 저장 시 변경된 사항이 없으면 Alert 처리",
+            "2026-07-21T18:17:00+09:00",
+        )
+        _write(repository, "src/session/SessionProvider.ts", "export const session = true;\n")
+        _commit(
+            repository,
+            "feat: canSave 권한 체크에 대한 Backend 구현",
+            "2026-07-22T15:36:00+09:00",
+        )
+
+        changes, _indexes, _excluded, _truncated = collect_changes(
+            [repository],
+            "저장 시 변경된 사항이 없으면 Alert 처리",
+            date(2026, 7, 22),
+            date(2026, 7, 27),
+            True,
+            _settings(),
+            request_text="사업계획관리시스템 기반사항 반영 요청",
+        )
+        by_path = {item.path: item for item in changes}
+
+        self.assertEqual(
+            set(by_path),
+            {page_path, company_page_path, utility_path},
+        )
+        self.assertNotIn(unrelated_path, by_path)
+        self.assertTrue(
+            all(item.source == "git-related-recovery" for item in by_path.values())
+        )
+        self.assertTrue(
+            all("커밋 문안·diff 직접 일치" in item.selection_reason for item in by_path.values())
+        )
+
     def test_pathless_input_does_not_guess_from_single_unrelated_file(self):
         repository = _create_repository()
         vo_path = "src/order/OrderVo.java"
