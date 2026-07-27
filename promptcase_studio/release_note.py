@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from promptcase_studio.config import PROJECT_ROOT
+from promptcase_studio.json_repair import escape_json_string_control_characters
 from promptcase_studio.models import ScanBundle
 from promptcase_studio.scanner import change_manifest_markdown, redact_sensitive_text
 
@@ -165,6 +166,7 @@ def _load_release_note_json(text: str) -> Any:
 
 def parse_release_note_response(raw: str) -> dict[str, str]:
     text = raw.lstrip("\ufeff").strip()
+    text, _ = escape_json_string_control_characters(text)
     try:
         value = _load_release_note_json(text)
     except json.JSONDecodeError as exc:

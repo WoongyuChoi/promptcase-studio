@@ -140,6 +140,28 @@ class ResponseParserTests(unittest.TestCase):
         result = parse_structured_response(json.dumps(payload, ensure_ascii=False))
         self.assertIn(",", result["testCase"]["testData"])
 
+    def test_accepts_test_data_value_list_without_sentence_ending(self):
+        payload = valid_payload()
+        payload["testCase"]["testData"] = (
+            "보고서기준년월 202607, 사옥코드 0001, 공통코드에 없는 사옥구분코드 값"
+        )
+
+        result = parse_structured_response(json.dumps(payload, ensure_ascii=False))
+
+        self.assertEqual(result["testCase"]["testData"], payload["testCase"]["testData"])
+
+    def test_repairs_literal_control_character_inside_json_string(self):
+        payload = valid_payload()
+        payload["testCase"]["testData"] = "보고서기준년월 202607,\t사옥코드 0001"
+        raw = json.dumps(payload, ensure_ascii=False).replace("\\t", "\t")
+
+        result = parse_structured_response(raw)
+
+        self.assertEqual(
+            result["testCase"]["testData"],
+            "보고서기준년월 202607, 사옥코드 0001",
+        )
+
     def test_accepts_natural_complete_sentences_that_end_in_da(self):
         payload = valid_payload()
         payload["testCase"]["procedure"][2] = (

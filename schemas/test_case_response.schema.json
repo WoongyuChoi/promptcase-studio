@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://promptcase-studio.local/schemas/test_case_response-2.2.0.json",
+  "$id": "https://promptcase-studio.local/schemas/test_case_response-2.3.0.json",
   "title": "Promptcase Studio Unit Test Response",
   "description": "사람이 작성한 형태의 한국어 단위테스트 문안 계약",
   "type": "object",
@@ -82,11 +82,11 @@
           }
         },
         "testData": {
-          "description": "필요할 때 식별 가능한 값을 한국어 조사와 쉼표로 자연스럽게 연결한 한 문장이며 별도 데이터가 없으면 빈 문자열",
+          "description": "필요할 때 식별 가능한 값이나 조건을 자연스럽게 연결한 문장 또는 값 목록이며 별도 데이터가 없으면 빈 문자열",
           "type": "string",
           "minLength": 0,
           "maxLength": 180,
-          "pattern": "^(?:$|(?!\\s*(?:[-*#]|[0-9]+[.)]))(?=[^\\r\\n]*다$)[^\\r\\n\\u005c:;：；·ㆍ‧∙⋅○●•◦▪▫◆◇▶▷■□※★☆♥♡♠♣\\\"'“”‘’「」『』＂＇`*#><\\[\\]{}|~]+)$"
+          "pattern": "^(?:$|(?!\\s*(?:[-*#]|[0-9]+[.)]))[^\\r\\n\\u005c:;：；·ㆍ‧∙⋅○●•◦▪▫◆◇▶▷■□※★☆♥♡♠♣\\\"'“”‘’「」『』＂＇`*#><\\[\\]{}|~]+)$"
         },
         "expectedResult": {
           "description": "하나 또는 서로 직접 연결된 두 개의 관찰 결과를 간결하게 합친 한 문장",

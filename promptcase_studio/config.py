@@ -392,11 +392,21 @@ def _migrate_gemini_model(settings: dict[str, Any]) -> dict[str, Any]:
     return settings
 
 
+def _migrate_legacy_system_name(settings: dict[str, Any]) -> dict[str, Any]:
+    # 3.6.0 wrote this domain-specific example as if it were a user choice.
+    # Treat it as automatic detection during upgrade. A real system with the
+    # same name is still recovered from the request or can be entered again.
+    if str(settings.get("systemName", "")).strip() == "채산관리시스템":
+        settings["systemName"] = ""
+    return settings
+
+
 def load_settings() -> dict[str, Any]:
     initialize_runtime_environment()
     settings = _read_json(DEFAULT_SETTINGS_PATH)
     settings = _deep_merge(settings, _read_json(LOCAL_SETTINGS_PATH))
     settings = _migrate_legacy_template_path(settings)
+    settings = _migrate_legacy_system_name(settings)
     return _migrate_gemini_model(settings)
 
 

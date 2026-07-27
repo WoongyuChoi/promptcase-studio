@@ -5,6 +5,8 @@ import re
 from collections.abc import Callable
 from typing import Any, Iterable, TypeVar
 
+from promptcase_studio.json_repair import escape_json_string_control_characters
+
 
 T = TypeVar("T")
 
@@ -127,6 +129,7 @@ def _json_object_brace_balance(text: str) -> int | None:
 
 def _extract_json_text(raw: str) -> str:
     text = raw.lstrip("\ufeff").strip()
+    text, _ = escape_json_string_control_characters(text)
     candidates = _top_level_json_objects(text)
     if len(candidates) == 1:
         return candidates[0]
@@ -601,7 +604,6 @@ def parse_structured_response(raw: str, evidence_text: str | None = None) -> dic
                 "testCase.testData",
                 minimum=10,
                 maximum=180,
-                endings=("다",),
                 allow_empty=True,
             ),
             _raw_string(test_case.get("testData")),

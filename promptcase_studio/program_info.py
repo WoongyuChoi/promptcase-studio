@@ -4,7 +4,7 @@ import re
 from pathlib import PurePosixPath
 
 
-DEFAULT_PROGRAM_CATEGORY = "채산관리시스템"
+DEFAULT_PROGRAM_CATEGORY = "프로젝트"
 DEFAULT_DETAIL_CATEGORY = "Program"
 
 _SQL_EXTENSIONS = {

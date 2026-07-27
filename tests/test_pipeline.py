@@ -9,11 +9,13 @@ from promptcase_studio.config import load_settings
 from promptcase_studio.models import AnalysisRequest, ChangeItem, ContextFile, ScanBundle
 from promptcase_studio.pipeline import (
     PipelinePausedError,
+    _configured_system_name,
     _correction_prompt,
     _document_title,
     _program_category,
     _program_info,
     _quality_sources_for_bundle,
+    _resolve_system_name,
     run_pipeline,
 )
 from promptcase_studio.providers.mock import MockProvider
@@ -152,11 +154,76 @@ class PipelineTests(unittest.TestCase):
             ),
             environment="online",
         )
-        self.assertEqual(_document_title({"documentTitle": "KPI 관리 포털"}, request), "KPI_관리_포털")
+        self.assertEqual(
+            _document_title({"documentTitle": "KPI 관리 포털"}, request),
+            "사업계획관리시스템",
+        )
         self.assertEqual(_document_title({"documentTitle": ""}, request), "사업계획관리시스템")
         self.assertEqual(
             _document_title({"documentTitle": "사업계획관리시스템 20260722"}, request),
             "사업계획관리시스템",
+        )
+        self.assertEqual(
+            _configured_system_name({"systemName": " 통합/정산 `시스템` "}),
+            "통합 정산 시스템",
+        )
+        self.assertEqual(
+            _configured_system_name({"systemName": ""}),
+            "",
+        )
+
+    def test_system_name_uses_manual_label_grounded_ai_and_project_in_order(self):
+        labeled_request = AnalysisRequest(
+            project_roots=[Path("C:/Project/unrelated-repository")],
+            manual_changes="",
+            request_text="시스템명: 통합정산플랫폼\n사용자 저장 조건 변경",
+            environment="online",
+        )
+        self.assertEqual(
+            _resolve_system_name(
+                {"documentTitle": "사용자저장화면"},
+                labeled_request,
+                "",
+            ),
+            "통합정산플랫폼",
+        )
+        self.assertEqual(
+            _resolve_system_name(
+                {"documentTitle": "사용자저장화면"},
+                labeled_request,
+                "인사관리포털",
+            ),
+            "인사관리포털",
+        )
+
+        multi_system_request = AnalysisRequest(
+            project_roots=[Path("C:/Project/legacy-api")],
+            manual_changes="",
+            request_text=(
+                "기존 회계관리시스템에서 신규 자산관리시스템으로 기능을 이관한다"
+            ),
+            environment="online",
+        )
+        self.assertEqual(
+            _resolve_system_name(
+                {"documentTitle": "자산관리시스템"},
+                multi_system_request,
+            ),
+            "자산관리시스템",
+        )
+
+        project_request = AnalysisRequest(
+            project_roots=[Path("C:/Project/FileRadar/src")],
+            manual_changes="",
+            request_text="검색 결과 정렬 조건을 변경한다",
+            environment="online",
+        )
+        self.assertEqual(
+            _resolve_system_name(
+                {"documentTitle": "검색 결과 화면"},
+                project_request,
+            ),
+            "FileRadar",
         )
 
     def test_program_project_labels_use_selected_analysis_root_project_name(self):
@@ -340,12 +407,25 @@ class PipelineTests(unittest.TestCase):
             environment="online",
         )
 
-        self.assertEqual(
-            _program_category({"documentTitle": "인사관리시스템"}, request),
-            "인사관리시스템",
-        )
+        self.assertEqual(_program_category({"documentTitle": "인사관리시스템"}, request), "sample")
         self.assertEqual(
             _program_category({"documentTitle": ""}, request),
+            "sample",
+        )
+        self.assertEqual(
+            _program_category(
+                {"documentTitle": "부동산구분코드관리"},
+                request,
+                "채산관리시스템",
+            ),
+            "채산관리시스템",
+        )
+        self.assertEqual(
+            _document_title(
+                {"documentTitle": "부동산구분코드관리"},
+                request,
+                "채산관리시스템",
+            ),
             "채산관리시스템",
         )
 
@@ -390,6 +470,8 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue((result.run_directory / "scope_decision.json").exists())
         self.assertTrue((result.run_directory / "pipeline.log").exists())
         document = json.loads((result.run_directory / "document.json").read_text(encoding="utf-8"))
+        self.assertEqual(document["documentTitle"], "sample_project")
+        self.assertEqual(document["programInfo"][0]["category"], "sample_project")
         self.assertEqual(document["programInfo"][0]["project"], "sample_project")
         self.assertIn("[CONTEXT]", (result.run_directory / "pipeline.log").read_text(encoding="utf-8"))
         self.assertTrue(any(level == "MOCK" for level, _ in logs))
@@ -398,6 +480,40 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(
             any(level == "REVIEW" and "추가 AI 품질 검토를 생략" in message for level, message in logs)
         )
+
+    def test_auto_system_name_is_recomputed_for_each_pipeline_run(self):
+        case_directory = TEMP_ROOT / "pipeline-auto-system-name"
+        case_directory.mkdir(parents=True, exist_ok=True)
+        settings = deepcopy(load_settings())
+        settings["systemName"] = ""
+        settings["mockMode"] = True
+        settings["qualityReviewEnabled"] = False
+        settings["templatePath"] = str(
+            PROJECT_ROOT / "templates" / "unittest_template.xlsx"
+        )
+        settings["runDirectory"] = str(case_directory / "runs")
+
+        results = []
+        for system_name in ("인사관리시스템", "자산관리시스템"):
+            request = AnalysisRequest(
+                project_roots=[FIXTURE_ROOT.resolve()],
+                manual_changes="변경: src/service/UserService.java",
+                request_text=f"시스템명: {system_name}\n사용자 조회 조건을 변경한다",
+                environment="online",
+                include_git=False,
+            )
+            results.append(run_pipeline(request, settings))
+
+        for result, system_name in zip(
+            results,
+            ("인사관리시스템", "자산관리시스템"),
+        ):
+            document = json.loads(
+                (result.run_directory / "document.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(document["documentTitle"], system_name)
+            self.assertEqual(document["programInfo"][0]["category"], system_name)
+            self.assertTrue(result.suggested_filename.startswith(f"{system_name}_"))
 
     def test_invalid_structured_response_is_reprompted_and_preserved(self):
         class InvalidThenValidProvider:

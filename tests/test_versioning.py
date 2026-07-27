@@ -4,11 +4,22 @@ import unittest
 
 from promptcase_studio import __version__
 from promptcase_studio.config import PROJECT_ROOT
+from promptcase_studio.program_info import DEFAULT_PROGRAM_CATEGORY
 
 
 class VersioningTests(unittest.TestCase):
     def test_product_version_is_semver(self):
         self.assertRegex(__version__, r"^\d+\.\d+\.\d+$")
+
+    def test_bundled_document_system_name_is_domain_neutral(self):
+        settings = json.loads(
+            (PROJECT_ROOT / "config" / "app.settings.json").read_text(
+                encoding="utf-8-sig"
+            )
+        )
+
+        self.assertEqual(settings["systemName"], "")
+        self.assertEqual(DEFAULT_PROGRAM_CATEGORY, "프로젝트")
 
     def test_product_prompt_bundle_and_readme_versions_match(self):
         manifest = json.loads(

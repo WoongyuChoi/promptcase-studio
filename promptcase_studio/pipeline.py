@@ -152,14 +152,11 @@ def _program_info(
 def _program_category(
     structured: dict[str, Any],
     request: AnalysisRequest,
+    system_name: str | None = None,
 ) -> str:
-    supplied = str(structured.get("documentTitle", "")).strip()
-    if supplied:
-        return normalize_program_category(supplied)
-    inferred_title = _document_title(structured, request).replace("_", " ")
-    if "시스템" in inferred_title:
-        return normalize_program_category(inferred_title)
-    return DEFAULT_PROGRAM_CATEGORY
+    return normalize_program_category(
+        _resolve_system_name(structured, request, system_name or "")
+    )
 
 
 def _safe_output_stem(name: str) -> str:
@@ -168,35 +165,116 @@ def _safe_output_stem(name: str) -> str:
     return text[:40].rstrip("_-") or "프로젝트"
 
 
-def _document_title(structured: dict[str, Any], request: AnalysisRequest) -> str:
-    title = str(structured.get("documentTitle", "")).strip()
-    if not title:
-        lines = [line.strip() for line in request.request_text.splitlines()]
-        for index, line in enumerate(lines):
-            if line.replace(" ", "") in {"요청제목", "제목"}:
-                title = next((item for item in lines[index + 1 :] if item), "")
-                break
-        search_text = title or request.request_text
-        system_match = re.search(r"[0-9A-Za-z가-힣_-]{2,40}시스템", search_text)
-        if system_match:
-            title = system_match.group(0)
+def _document_title(
+    structured: dict[str, Any],
+    request: AnalysisRequest,
+    system_name: str | None = None,
+) -> str:
+    return _safe_output_stem(
+        _resolve_system_name(structured, request, system_name or "")
+    )
 
-    if not title:
-        generic_roots = {"src", "source", "app", "frontend", "backend", "api"}
-        for root in request.project_roots:
-            candidate = root.name
-            if candidate.casefold() in generic_roots:
-                candidate = root.parent.name
-            if candidate and candidate.casefold() not in generic_roots:
-                title = re.sub(r"(?i)(?:[-_](?:backend|frontend|api))+$", "", candidate)
-                break
 
-    if not title:
-        title = str(structured.get("testCase", {}).get("name", "프로젝트"))
-    title = re.sub(r"\s*단위\s*테스트.*$", "", title).strip()
-    title = re.sub(r"(?:19|20)\d{2}[-_.]?\d{2}[-_.]?\d{2}", "", title)
-    title = re.sub(r"(?<!\d)\d{6}(?!\d)", "", title).strip(" _-")
-    return _safe_output_stem(title)
+def _normalize_system_name(value: object) -> str:
+    value = re.sub(r"\s+", " ", str(value or "").strip())
+    value = re.sub(r"[^0-9A-Za-z가-힣 _-]+", " ", value)
+    value = re.sub(r"\s+", " ", value).strip(" ._-")
+    value = re.sub(r"\s*단위\s*테스트.*$", "", value).strip()
+    value = re.sub(r"(?:19|20)\d{2}[-_.]?\d{2}[-_.]?\d{2}", "", value)
+    value = re.sub(r"(?<!\d)\d{6}(?!\d)", "", value).strip(" _-")
+    return value[:40].rstrip()
+
+
+def _configured_system_name(settings: dict[str, Any]) -> str:
+    return _normalize_system_name(settings.get("systemName", ""))
+
+
+def _labeled_system_names(request_text: str) -> list[str]:
+    labels = {
+        "시스템",
+        "시스템명",
+        "대상시스템",
+        "대상시스템명",
+        "프로젝트",
+        "프로젝트명",
+    }
+    lines = [line.strip() for line in request_text.splitlines()]
+    candidates: list[str] = []
+    for index, line in enumerate(lines):
+        compact = re.sub(r"\s+", "", line)
+        supplied = ""
+        match = re.match(
+            r"^(?:시스템명?|대상시스템명?|프로젝트명?)\s*[:：]\s*(.+)$",
+            line,
+        )
+        if match:
+            supplied = match.group(1)
+        elif compact in labels:
+            supplied = next((item for item in lines[index + 1 :] if item), "")
+        normalized = _normalize_system_name(supplied)
+        if normalized and normalized not in candidates:
+            candidates.append(normalized)
+    return candidates
+
+
+def _request_system_names(request_text: str) -> list[str]:
+    candidates: list[str] = []
+    for match in re.finditer(r"[0-9A-Za-z가-힣_-]{2,40}시스템", request_text):
+        normalized = _normalize_system_name(match.group(0))
+        if normalized and normalized not in candidates:
+            candidates.append(normalized)
+    return candidates
+
+
+def _project_system_name(request: AnalysisRequest) -> str:
+    for root in request.project_roots:
+        candidate_path = root
+        candidate = candidate_path.name.strip()
+        if candidate.casefold() in GENERIC_SOURCE_ROOTS:
+            candidate_path = candidate_path.parent
+            candidate = candidate_path.name.strip()
+        candidate = re.sub(
+            r"(?i)(?:[-_](?:backend|frontend|api|server|client))+$",
+            "",
+            candidate,
+        )
+        normalized = _normalize_system_name(candidate)
+        if normalized and normalized.casefold() not in GENERIC_SOURCE_ROOTS:
+            return normalized
+    return ""
+
+
+def _resolve_system_name(
+    structured: dict[str, Any],
+    request: AnalysisRequest,
+    configured_system_name: str = "",
+) -> str:
+    configured = _normalize_system_name(configured_system_name)
+    if configured:
+        return configured
+
+    labeled = _labeled_system_names(request.request_text)
+    if labeled:
+        return labeled[0]
+
+    supplied = _normalize_system_name(structured.get("documentTitle", ""))
+    request_candidates = _request_system_names(request.request_text)
+    if supplied:
+        supplied_key = re.sub(r"\s+", "", supplied).casefold()
+        for candidate in request_candidates:
+            if re.sub(r"\s+", "", candidate).casefold() == supplied_key:
+                return candidate
+    if len(request_candidates) == 1:
+        return request_candidates[0]
+    if request_candidates:
+        return request_candidates[0]
+
+    project_name = _project_system_name(request)
+    if project_name:
+        return project_name
+    if supplied:
+        return supplied
+    return DEFAULT_PROGRAM_CATEGORY
 
 
 def _preview(value: str, limit: int = 1_000) -> str:
@@ -605,6 +683,7 @@ def run_pipeline(
     _log(log, "ARTIFACT", "change manifest와 context bundle 저장")
 
     quality_review_enabled = bool(settings.get("qualityReviewEnabled", True))
+    configured_system_name = _configured_system_name(settings)
     prompt_settings = settings.get("prompt", {})
     if not isinstance(prompt_settings, dict):
         prompt_settings = {}
@@ -622,6 +701,7 @@ def run_pipeline(
         request.request_text,
         prompt_settings,
         reserve_chars=review_reserve,
+        system_name=configured_system_name,
     )
     (run_directory / "prompt.md").write_text(prompt, encoding="utf-8")
     (run_directory / "evidence.txt").write_text(evidence, encoding="utf-8")
@@ -875,7 +955,19 @@ def run_pipeline(
     except Exception as exc:
         _log(log, "ERROR", f"AI 응답 생성 또는 검증 실패: {exc}")
         raise
-    title = _document_title(structured, request)
+    resolved_system_name = _resolve_system_name(
+        structured,
+        request,
+        configured_system_name,
+    )
+    structured["documentTitle"] = resolved_system_name
+    title = _document_title(structured, request, resolved_system_name)
+    name_source = "환경설정" if configured_system_name else "의뢰서·프로젝트 자동 감지"
+    _log(
+        log,
+        "DOCUMENT",
+        f"문서 시스템명 {resolved_system_name} 선택 ({name_source})",
+    )
     release_note_attempts = max(
         1,
         min(int(settings.get("releaseNoteValidationAttempts", 2)), 3),
@@ -896,7 +988,7 @@ def run_pipeline(
             encoding="utf-8",
         )
         if review_interruption:
-            release_note = fallback_release_note(structured, title)
+            release_note = fallback_release_note(structured, resolved_system_name)
             _log(
                 log,
                 "WARN",
@@ -913,7 +1005,7 @@ def run_pipeline(
             )
             _log(log, "RELEASE", "릴리즈 노트 메일 문안 생성 및 계약 검증 완료")
     except Exception as exc:
-        release_note = fallback_release_note(structured, title)
+        release_note = fallback_release_note(structured, resolved_system_name)
         _log(
             log,
             "WARN",
@@ -935,7 +1027,7 @@ def run_pipeline(
     document = {
         "programInfo": _program_info(
             bundle.changes,
-            _program_category(structured, request),
+            _program_category(structured, request, resolved_system_name),
         ),
         **structured,
     }

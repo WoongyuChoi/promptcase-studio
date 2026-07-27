@@ -319,6 +319,7 @@ def build_prompt_package(
     prompt_settings: dict[str, object] | None = None,
     *,
     reserve_chars: int = 0,
+    system_name: str = "",
 ) -> tuple[str, str]:
     configured_maximum = _setting_int(
         prompt_settings,
@@ -368,8 +369,10 @@ def build_prompt_package(
         "사용자 변경 요약",
     ) or "별도 사용자 변경 요약 없음"
 
+    configured_system_name = system_name.strip() or "자동 감지"
     replacements = {
         "{{PROMPT_METADATA}}": _prompt_metadata(),
+        "{{SYSTEM_NAME}}": configured_system_name,
         "{{SCAN_SUMMARY}}": _scan_summary(bundle),
         "{{REQUEST_TEXT}}": request,
         "{{CHANGE_NOTES}}": change_notes,
@@ -414,6 +417,7 @@ def build_prompt_package(
         )
     evidence = "\n\n".join(
         (
+            "[문서 설정]\n시스템명: " + configured_system_name,
             "[개발 의뢰]\n" + request,
             "[사용자 변경 요약]\n" + change_notes,
             "[변경 파일 목록]\n" + manifest,

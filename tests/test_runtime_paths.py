@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from promptcase_studio.config import (
     _migrate_gemini_model,
+    _migrate_legacy_system_name,
     _migrate_legacy_template_path,
     _replace_from_bundle,
     build_runtime_paths,
@@ -67,6 +68,20 @@ class RuntimePathsTests(unittest.TestCase):
         migrated = _migrate_gemini_model(settings)
 
         self.assertEqual(migrated["providers"]["online"]["model"], "auto")
+
+    def test_legacy_forced_domain_name_is_migrated_to_auto_detection(self) -> None:
+        self.assertEqual(
+            _migrate_legacy_system_name({"systemName": "채산관리시스템"})[
+                "systemName"
+            ],
+            "",
+        )
+        self.assertEqual(
+            _migrate_legacy_system_name({"systemName": "통합정산시스템"})[
+                "systemName"
+            ],
+            "통합정산시스템",
+        )
 
     def test_bundled_resource_replace_retries_transient_windows_lock(self) -> None:
         with writable_test_directory() as directory:

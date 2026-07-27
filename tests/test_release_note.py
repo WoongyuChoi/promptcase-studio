@@ -75,6 +75,17 @@ class ReleaseNoteTests(unittest.TestCase):
         self.assertTrue(release_note["body"].endswith("감사합니다."))
         self.assertIn("제목:", render_release_note(release_note))
 
+    def test_response_parser_repairs_literal_newlines_inside_body_string(self):
+        payload = json.dumps(
+            fallback_release_note(self.structured, "채산관리시스템"),
+            ensure_ascii=False,
+        ).replace("\\n", "\n")
+
+        release_note = parse_release_note_response(payload)
+
+        self.assertIn("\n[변경 사항]\n", release_note["body"])
+        self.assertTrue(release_note["body"].endswith("감사합니다."))
+
     def test_response_parser_accepts_code_fence_and_surrounding_explanation(self):
         payload = json.dumps(
             fallback_release_note(self.structured, "채산관리시스템"),

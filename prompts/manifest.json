@@ -1,10 +1,10 @@
 {
-  "bundleVersion": "3.5.1",
+  "bundleVersion": "3.6.1",
   "contextPolicyVersion": "3.2.0",
-  "responseSchemaVersion": "2.2.0",
+  "responseSchemaVersion": "2.3.0",
   "qualityPolicyVersion": "1.4.0",
   "releaseNotePromptVersion": "1.1.1",
   "releaseNoteSchemaVersion": "1.1.0",
-  "lastReviewed": "2026-07-23",
+  "lastReviewed": "2026-07-27",
   "reviewCadence": "분기 1회 및 템플릿이나 응답 계약 변경 시"
 }

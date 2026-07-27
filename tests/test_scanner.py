@@ -1,4 +1,5 @@
 import codecs
+import os
 import shutil
 import unittest
 from contextlib import contextmanager
@@ -54,6 +55,53 @@ def workspace_temporary_directory():
 
 
 class ScannerTests(unittest.TestCase):
+    def test_non_git_mode_uses_modified_dates_without_invoking_git_detection(self):
+        with workspace_temporary_directory() as directory:
+            root = Path(directory)
+            source = root / "src" / "sample.py"
+            source.parent.mkdir(parents=True)
+            source.write_text("def calculate_total():\n    return 1\n", encoding="utf-8")
+            modified = datetime(2026, 7, 15, 12, 0).timestamp()
+            os.utime(source, (modified, modified))
+            logs: list[tuple[str, str]] = []
+
+            with patch(
+                "promptcase_studio.scanner.is_git_repository",
+                side_effect=AssertionError("Git detection must not run"),
+            ):
+                bundle = build_scan_bundle(
+                    [root],
+                    "",
+                    date(2026, 7, 15),
+                    date(2026, 7, 15),
+                    False,
+                    {"maxCandidateFiles": 100, "maxRelatedFiles": 2},
+                    lambda level, message: logs.append((level, message)),
+                )
+
+        self.assertEqual(len(bundle.changes), 1)
+        self.assertEqual(bundle.changes[0].source, "modified-date")
+        self.assertEqual(bundle.changes[0].path, "src/sample.py")
+        self.assertTrue(any("수정일과 수동 변경 경로" in message for _, message in logs))
+        self.assertTrue(any("삭제 파일은 자동 감지되지 않습니다" in warning for warning in bundle.warnings))
+
+    def test_non_git_mode_keeps_manually_declared_deleted_file(self):
+        with workspace_temporary_directory() as directory:
+            root = Path(directory)
+            bundle = build_scan_bundle(
+                [root],
+                "삭제: src/legacy.py",
+                None,
+                None,
+                False,
+                {"maxCandidateFiles": 100, "maxRelatedFiles": 2},
+            )
+
+        self.assertEqual(len(bundle.changes), 1)
+        self.assertEqual(bundle.changes[0].change_type, "삭제")
+        self.assertFalse(bundle.changes[0].exists)
+        self.assertEqual(bundle.changes[0].source, "manual")
+
     def test_korean_ngram_similarity_tolerates_spacing_and_partial_wording(self):
         query = "저장시 변경사항 없으면 알림"
         matching = "feat: 저장 시 변경된 사항이 없으면 Alert 처리"

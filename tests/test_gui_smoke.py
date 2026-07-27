@@ -632,7 +632,9 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(dialog.qwen_timeout.minimumHeight(), 24)
         self.assertEqual(dialog.qwen_timeout.maximumHeight(), 24)
         field_labels = dialog.findChildren(QLabel, "settingsFieldLabel")
-        self.assertEqual(len(field_labels), 14)
+        self.assertEqual(len(field_labels), 15)
+        self.assertEqual(dialog.system_name.text(), "")
+        self.assertIn("자동 감지", dialog.system_name.placeholderText())
         self.assertTrue(
             all(
                 label.font().pixelSize()
@@ -701,6 +703,7 @@ class GuiSmokeTests(unittest.TestCase):
         window.settings["qualityReviewValidationAttempts"] = 2
         window.settings["qualityGateMode"] = "best_effort"
         dialog = SettingsDialog(window.settings, window)
+        dialog.system_name.setText("통합정산시스템")
         dialog.gemini_attempts.setValue(4)
         dialog.gemini_model.setCurrentIndex(
             dialog.gemini_model.findData("gemini-3.5-flash-lite")
@@ -717,6 +720,7 @@ class GuiSmokeTests(unittest.TestCase):
             set(saved),
             {
                 "defaultEnvironment",
+                "systemName",
                 "mockMode",
                 "qualityReviewEnabled",
                 "qualityReviewPasses",
@@ -728,6 +732,7 @@ class GuiSmokeTests(unittest.TestCase):
         )
         self.assertNotIn("scanner", saved)
         self.assertNotIn("templatePath", saved)
+        self.assertEqual(saved["systemName"], "통합정산시스템")
         self.assertEqual(saved["providers"]["online"]["maxAttempts"], 4)
         self.assertEqual(saved["providers"]["online"]["model"], "gemini-3.5-flash-lite")
         self.assertEqual(saved["qualityReviewPasses"], 2)

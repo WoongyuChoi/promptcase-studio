@@ -2234,6 +2234,13 @@ def collect_changes(
         raise ValueError(
             "명시한 Git 커밋을 분석하려면 Git 변경 수집을 활성화해야 합니다."
         )
+    if not include_git:
+        _log(
+            log,
+            "INFO",
+            "Git 변경 수집을 사용하지 않아 파일 수정일과 수동 변경 경로를 기준으로 분석합니다. "
+            "삭제 파일은 변경 입력에 직접 적어야 합니다",
+        )
 
     normalized_roots: list[Path] = []
     for root in roots:
@@ -2248,7 +2255,15 @@ def collect_changes(
         indexes[str(root)] = index
         excluded_total += excluded
         truncated = truncated or was_truncated
-        git_available = include_git and is_git_repository(root)
+        repository_available = is_git_repository(root) if include_git else False
+        git_available = include_git and repository_available
+        if include_git and not repository_available:
+            _log(
+                log,
+                "INFO",
+                f"{root.name}: Git 저장소가 아니므로 파일 수정일과 수동 변경 경로를 사용합니다. "
+                "삭제 파일은 변경 입력에 직접 적어야 합니다",
+            )
         if git_available and not explicit_commit_refs:
             git_scope_changes.extend(
                 collect_git_changes(
@@ -4638,6 +4653,11 @@ def build_scan_bundle(
         request_text,
     )
     if not changes:
+        if not include_git:
+            raise ValueError(
+                "변경 파일을 찾지 못했습니다. Git 변경 수집을 끈 경우 날짜 범위 또는 "
+                "수동 변경 경로가 필요하며 삭제 파일은 직접 적어야 합니다."
+            )
         raise ValueError("변경 파일을 찾지 못했습니다. 날짜, Git Diff 또는 수동 목록을 확인해 주세요.")
 
     explicit_commit_scope = all(
@@ -4713,6 +4733,23 @@ def build_scan_bundle(
 
     contexts: list[ContextFile] = []
     warnings: list[str] = []
+    if not include_git:
+        warnings.append(
+            "Git 변경 수집이 꺼져 있어 파일 수정일과 수동 변경 경로를 사용했습니다. "
+            "수정일은 실제 코드 변경 시점과 다를 수 있고 삭제 파일은 자동 감지되지 않습니다."
+        )
+    else:
+        non_git_roots = [
+            root.name or str(root)
+            for root in roots
+            if not is_git_repository(root.resolve())
+        ]
+        if non_git_roots:
+            warnings.append(
+                "Git 저장소가 아닌 분석 대상은 파일 수정일과 수동 변경 경로를 사용했습니다: "
+                + ", ".join(non_git_roots)
+                + ". 삭제 파일은 자동 감지되지 않습니다."
+            )
     recovered_changes = [
         change for change in changes if change.source == "git-related-recovery"
     ]

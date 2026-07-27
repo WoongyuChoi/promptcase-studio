@@ -232,6 +232,26 @@ class SettingsDialog(QDialog):
             help_title="문서 품질",
             help_body="응답 검증과 품질 검토 횟수, 문서 완료 정책을 설정합니다.",
         )
+        system_name_row = QHBoxLayout()
+        system_name_row.setSpacing(8)
+        system_name_label = self._field_label("문서 시스템명")
+        self.system_name = QLineEdit(
+            str(self.settings.get("systemName", ""))
+        )
+        self.system_name.setMaxLength(40)
+        self.system_name.setFixedWidth(280)
+        self.system_name.setPlaceholderText("비워두면 의뢰서와 프로젝트에서 자동 감지")
+        system_name_row.addWidget(system_name_label)
+        system_name_row.addWidget(self.system_name)
+        system_name_row.addWidget(
+            self._help_button(
+                "문서 시스템명",
+                "비워두면 의뢰서의 시스템명과 프로젝트 경로에서 자동 감지합니다. "
+                "직접 입력한 경우에만 다운로드 파일명과 프로그램 정보의 구분에 고정 적용합니다.",
+            )
+        )
+        system_name_row.addStretch(1)
+
         self.quality_review_checkbox = QCheckBox("AI 품질 검토")
         self.quality_review_checkbox.setChecked(
             bool(self.settings.get("qualityReviewEnabled", True))
@@ -317,6 +337,7 @@ class SettingsDialog(QDialog):
         )
         validation_row.addStretch(1)
 
+        quality_layout.addLayout(system_name_row)
         quality_layout.addLayout(quality_toggle_row)
         quality_layout.addLayout(quality_count_row)
         quality_layout.addLayout(quality_gate_row)
@@ -514,6 +535,7 @@ class SettingsDialog(QDialog):
         # effect after a user merely opened and saved this dialog.
         local_overrides = {
             "defaultEnvironment": "online" if self.online_radio.isChecked() else "secure",
+            "systemName": self.system_name.text().strip(),
             "mockMode": self.mock_checkbox.isChecked(),
             "qualityReviewEnabled": self.quality_review_checkbox.isChecked(),
             "qualityReviewPasses": self.quality_review_passes.value(),
