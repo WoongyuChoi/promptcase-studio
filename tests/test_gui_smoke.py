@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTabWidget,
     QToolButton,
 )
@@ -25,7 +26,7 @@ from promptcase_studio.ui.main_window import MainWindow, _wrap_alert_text
 from promptcase_studio.ui.release_note_dialog import ReleaseNoteDialog
 from promptcase_studio.ui.settings_dialog import SettingsDialog
 from promptcase_studio.ui.styles import APP_STYLESHEET
-from promptcase_studio.ui.tooltip import HelpTooltipButton
+from promptcase_studio.ui.tooltip import HelpTooltipButton, ValueTooltipFrame
 from promptcase_studio.ui.worker import _git_change_input_line
 
 
@@ -622,6 +623,7 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertGreaterEqual(window.control_scroll.parentWidget().width(), 500)
         self.assertLessEqual(window.control_scroll.parentWidget().width(), 620)
         self.assertEqual(window.progress.parentWidget().objectName(), "progressCluster")
+        self.assertIsInstance(window.progress.parentWidget(), ValueTooltipFrame)
         self.assertEqual(
             window.progress.parentWidget().parentWidget().objectName(), "card"
         )
@@ -646,6 +648,63 @@ class GuiSmokeTests(unittest.TestCase):
         ).y()
         self.assertEqual(run_bottom, download_bottom)
         self.assertEqual(run_bottom, terminal_bottom)
+        window.close()
+
+    def test_only_request_card_absorbs_extra_vertical_space(self):
+        window = MainWindow()
+        window.resize(1366, 768)
+        window.show()
+        self.app.processEvents()
+        base_request_height = window.request_text.height()
+        base_manual_height = window.manual_changes.height()
+        base_project_height = window.folder_list.height()
+
+        window.resize(1500, 1000)
+        self.app.processEvents()
+
+        self.assertGreater(window.request_text.height(), base_request_height)
+        self.assertEqual(window.manual_changes.height(), base_manual_height)
+        self.assertEqual(window.folder_list.height(), base_project_height)
+        self.assertEqual(
+            window.request_card.sizePolicy().verticalPolicy(),
+            QSizePolicy.Expanding,
+        )
+        self.assertFalse(window.control_scroll.verticalScrollBar().isVisible())
+        window.close()
+
+    def test_progress_area_uses_custom_tooltip_bubble(self):
+        window = MainWindow()
+        window.show()
+        self.app.processEvents()
+        progress_cluster = window.progress.parentWidget()
+        window.progress.setRange(0, 100)
+        window.progress.setValue(16)
+
+        progress_cluster.show_bubble()
+        self.app.processEvents()
+
+        self.assertIsInstance(progress_cluster, ValueTooltipFrame)
+        self.assertIsNotNone(progress_cluster._bubble)
+        self.assertTrue(progress_cluster._bubble.isVisible())
+        self.assertEqual(progress_cluster._bubble.card.width(), 68)
+        self.assertEqual(progress_cluster._bubble.value_label.text(), "16%")
+        self.assertEqual(progress_cluster._bubble.seam.objectName(), "tooltipSeam")
+        self.assertLessEqual(
+            progress_cluster._bubble.seam.geometry().left(),
+            progress_cluster._bubble.card.geometry().left(),
+        )
+        self.assertGreaterEqual(
+            progress_cluster._bubble.seam.geometry().right(),
+            progress_cluster._bubble.card.geometry().left(),
+        )
+        window.progress.setValue(92)
+        self.app.processEvents()
+        self.assertEqual(progress_cluster._bubble.value_label.text(), "92%")
+        self.assertFalse(
+            bool(progress_cluster._bubble.findChildren(QLabel, "tooltipTitle"))
+        )
+        progress_cluster.hide_bubble()
+        self.assertFalse(progress_cluster._bubble.isVisible())
         window.close()
 
     def test_settings_dialog_constructs(self):

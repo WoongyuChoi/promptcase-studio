@@ -102,6 +102,17 @@ QLabel#tooltipBody {
     font-size: 12px;
     font-weight: 600;
 }
+QFrame#tooltipValueCard {
+    background-color: #FFFFFF;
+    border: 1px solid #1F2937;
+    border-radius: 8px;
+}
+QLabel#tooltipValue {
+    background: transparent;
+    color: #111827;
+    font-size: 13px;
+    font-weight: 750;
+}
 QLabel#progressLabel {
     color: #7B8798;
     font-size: 10px;

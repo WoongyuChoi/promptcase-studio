@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PyQt5.QtCore import QEvent, QPoint, Qt
 from PyQt5.QtGui import QColor, QPainter, QPen, QPolygon
 from PyQt5.QtWidgets import (
@@ -45,9 +47,17 @@ class TooltipBubble(QWidget):
     """Rounded white tooltip with a left pointer and drop shadow."""
 
     CARD_WIDTH = 300
+    VALUE_CARD_WIDTH = 68
     OUTER_MARGIN = 8
 
-    def __init__(self, title: str, body: str, parent=None):
+    def __init__(
+        self,
+        title: str = "",
+        body: str = "",
+        parent=None,
+        *,
+        value: str | None = None,
+    ):
         super().__init__(
             parent,
             Qt.ToolTip | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint,
@@ -58,24 +68,35 @@ class TooltipBubble(QWidget):
 
         self.arrow = _TooltipArrow()
         self.card = QFrame()
-        self.card.setObjectName("tooltipCard")
-        self.card.setFixedWidth(self.CARD_WIDTH)
+        self.value_label: QLabel | None = None
+        if value is None:
+            self.card.setObjectName("tooltipCard")
+            self.card.setFixedWidth(self.CARD_WIDTH)
+        else:
+            self.card.setObjectName("tooltipValueCard")
+            self.card.setFixedWidth(self.VALUE_CARD_WIDTH)
         self.seam = QWidget(self)
         self.seam.setObjectName("tooltipSeam")
         self.seam.setAttribute(Qt.WA_TransparentForMouseEvents, True)
 
-        title_label = QLabel(title)
-        title_label.setObjectName("tooltipTitle")
-        title_label.setWordWrap(True)
-        body_label = QLabel(body)
-        body_label.setObjectName("tooltipBody")
-        body_label.setWordWrap(True)
-
         card_layout = QVBoxLayout(self.card)
-        card_layout.setContentsMargins(16, 14, 16, 14)
-        card_layout.setSpacing(8)
-        card_layout.addWidget(title_label)
-        card_layout.addWidget(body_label)
+        if value is None:
+            title_label = QLabel(title)
+            title_label.setObjectName("tooltipTitle")
+            title_label.setWordWrap(True)
+            body_label = QLabel(body)
+            body_label.setObjectName("tooltipBody")
+            body_label.setWordWrap(True)
+            card_layout.setContentsMargins(16, 14, 16, 14)
+            card_layout.setSpacing(8)
+            card_layout.addWidget(title_label)
+            card_layout.addWidget(body_label)
+        else:
+            self.value_label = QLabel(value)
+            self.value_label.setObjectName("tooltipValue")
+            self.value_label.setAlignment(Qt.AlignCenter)
+            card_layout.setContentsMargins(10, 8, 10, 8)
+            card_layout.addWidget(self.value_label)
 
         shadow = QGraphicsDropShadowEffect(self.card)
         shadow.setBlurRadius(14)
@@ -131,6 +152,11 @@ class TooltipBubble(QWidget):
         self.move(target_x, target_y)
         self.show()
         self.raise_()
+
+    def set_value(self, value: str) -> None:
+        if self.value_label is None:
+            raise RuntimeError("값 전용 툴팁에서만 값을 변경할 수 있습니다.")
+        self.value_label.setText(value)
 
 
 class HelpTooltipButton(QToolButton):
@@ -202,3 +228,49 @@ class HelpTooltipButton(QToolButton):
     def focusOutEvent(self, event) -> None:
         self.hide_bubble()
         super().focusOutEvent(event)
+
+
+class ValueTooltipFrame(QFrame):
+    """Non-button information area that shows a live compact value bubble."""
+
+    def __init__(self, value_provider: Callable[[], str], parent=None):
+        super().__init__(parent)
+        self.value_provider = value_provider
+        self._bubble: TooltipBubble | None = None
+        self.setAccessibleName("진행률")
+        self.setAccessibleDescription("현재 진행률을 퍼센트로 표시합니다")
+        self.setCursor(Qt.WhatsThisCursor)
+
+    def _ensure_bubble(self) -> TooltipBubble:
+        value = self.value_provider()
+        if self._bubble is None:
+            self._bubble = TooltipBubble(parent=self.window(), value=value)
+        else:
+            self._bubble.set_value(value)
+        return self._bubble
+
+    def show_bubble(self) -> None:
+        anchor = self.mapToGlobal(QPoint(self.width(), self.height() // 2))
+        self._ensure_bubble().show_at(anchor)
+
+    def refresh_value(self) -> None:
+        if self._bubble is not None and self._bubble.isVisible():
+            self._bubble.set_value(self.value_provider())
+
+    def hide_bubble(self) -> None:
+        if self._bubble is not None:
+            self._bubble.hide()
+
+    def event(self, event) -> bool:
+        if event.type() == QEvent.ToolTip:
+            self.show_bubble()
+            return True
+        return super().event(event)
+
+    def enterEvent(self, event) -> None:
+        super().enterEvent(event)
+        self.show_bubble()
+
+    def leaveEvent(self, event) -> None:
+        self.hide_bubble()
+        super().leaveEvent(event)

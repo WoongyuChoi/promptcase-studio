@@ -45,7 +45,7 @@ from promptcase_studio.ui.icons import interface_icon
 from promptcase_studio.ui.release_note_dialog import ReleaseNoteDialog
 from promptcase_studio.ui.settings_dialog import SettingsDialog
 from promptcase_studio.ui.styles import TERMINAL_STYLE
-from promptcase_studio.ui.tooltip import HelpTooltipButton
+from promptcase_studio.ui.tooltip import HelpTooltipButton, ValueTooltipFrame
 from promptcase_studio.ui.worker import GitDiffWorker, PipelineWorker
 
 
@@ -584,7 +584,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._build_environment_card())
         layout.addWidget(self._build_project_card())
         layout.addWidget(self._build_change_card())
-        layout.addWidget(self._build_request_card())
+        self.request_card = self._build_request_card()
+        layout.addWidget(self.request_card, 1)
 
         self.run_button = QPushButton("분석 시작")
         self.run_button.setObjectName("primaryButton")
@@ -598,7 +599,6 @@ class MainWindow(QMainWindow):
         self.release_note_button.setEnabled(False)
         self.release_note_button.clicked.connect(self._open_release_note)
         self.open_output_button = self.download_button
-        layout.addStretch(1)
         scroll.setWidget(container)
         panel_layout.addWidget(scroll, 1)
 
@@ -644,7 +644,8 @@ class MainWindow(QMainWindow):
         return card, layout
 
     def _build_environment_card(self) -> QFrame:
-        progress_cluster = QFrame()
+        progress_cluster = ValueTooltipFrame(self._progress_tooltip_value)
+        self.progress_cluster = progress_cluster
         progress_cluster.setObjectName("progressCluster")
         progress_cluster.setFixedHeight(26)
         progress_layout = QVBoxLayout(progress_cluster)
@@ -660,6 +661,7 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self.progress.setFixedSize(116, 8)
+        self.progress.valueChanged.connect(progress_cluster.refresh_value)
         progress_layout.addWidget(self.progress_label)
         progress_layout.addWidget(self.progress)
 
@@ -767,12 +769,14 @@ class MainWindow(QMainWindow):
             "구현 의도와 업무 규칙을 작성합니다\n반드시 확인할 시나리오를 함께 입력합니다",
         )
         self.request_text = QTextEdit()
-        self.request_text.setFixedHeight(100)
+        self.request_text.setMinimumHeight(100)
+        self.request_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.request_text.setPlaceholderText(
             "예) 사용자 조회 API를 삭제하고 연관된 메뉴 진입 경로를 정리했습니다.\n"
             "계약유지서비스 조회 기준과 VISS_D1300 툴팁 계산식을 변경했습니다."
         )
-        layout.addWidget(self.request_text)
+        layout.addWidget(self.request_text, 1)
+        card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         return card
 
     def _apply_default_environment(self) -> None:
@@ -1060,6 +1064,11 @@ class MainWindow(QMainWindow):
         current = self.progress.value()
         if current < self.PROGRESS_ACTIVE_LIMIT:
             self.progress.setValue(current + 1)
+
+    def _progress_tooltip_value(self) -> str:
+        maximum = self.progress.maximum()
+        value = self.progress.value() if maximum > 1 else 0
+        return f"{max(0, min(value, 100))}%"
 
     def _default_save_directory(self) -> Path:
         configured = resolve_project_path(self.settings.get("outputDirectory", "outputs"))
