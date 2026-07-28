@@ -7,17 +7,91 @@ from promptcase_studio.quality import (
     extract_change_anchors,
     find_implementation_preconditions,
     find_non_actionable_test_steps,
+    find_non_executable_test_data,
     find_overloaded_expected_result,
     find_step_count_mismatch,
     find_scope_inflation,
     find_semantic_duplicates,
     find_unnatural_test_data,
+    find_user_facing_implementation_details,
     quality_report_markdown,
 )
 from tests.test_response_parser import valid_payload
 
 
+def scenario_payload():
+    payload = valid_payload()
+    case = payload["testCase"]
+    for key in ("procedure", "testData", "expectedResult", "notes"):
+        case.pop(key, None)
+    case["scenarios"] = [
+        {
+            "kind": "success",
+            "title": "활성 사용자 정상 조회",
+            "procedure": "활성 상태 조건을 선택해 사용자 조회를 실행한다",
+            "testData": "ACTIVE 상태의 사용자 데이터를 사용한다",
+            "expectedResult": "활성 상태의 사용자가 조회 결과에 표시된다",
+            "notes": "위 결과가 확인되면 정상 조회 흐름으로 판단한다",
+            "evidenceRefs": ["ACTIVE"],
+        },
+        {
+            "kind": "validation",
+            "title": "비활성 사용자 조회 방어",
+            "procedure": "비활성 상태 조건을 선택해 사용자 조회를 실행한다",
+            "testData": "INACTIVE 상태의 사용자 데이터를 사용한다",
+            "expectedResult": "비활성 상태의 사용자가 조회 결과에서 제외된다",
+            "notes": "위 결과가 확인되면 조회 조건 방어가 정상으로 판단된다",
+            "evidenceRefs": ["INACTIVE"],
+        },
+    ]
+    case["notes"] = (
+        "정상 상태와 비활성 상태의 조회 결과가 모두 예상과 같으면 "
+        "사용자 조회 변경이 정상적으로 반영된 것으로 판단한다"
+    )
+    payload["testResult"].pop("testDetails", None)
+    return payload
+
+
 class QualityTests(unittest.TestCase):
+    def test_requires_tester_settable_values_in_scenario_test_data(self):
+        payload = scenario_payload()
+        bad_values = [
+            "기간별 실적 입력 데이터",
+            "KpiMapConfig 저장 설정",
+            "KpiMapActualModal 설정",
+        ]
+        for scenario, value in zip(payload["testCase"]["scenarios"], bad_values):
+            scenario["testData"] = value
+        payload["testCase"]["scenarios"].append(
+            {
+                **payload["testCase"]["scenarios"][0],
+                "title": "모달 설정 검증",
+                "testData": bad_values[2],
+            }
+        )
+
+        issues = find_non_executable_test_data(payload)
+
+        self.assertEqual(len(issues), 3)
+        self.assertTrue(all(issue["severity"] == "required" for issue in issues))
+
+    def test_requires_css_details_to_be_rewritten_as_observable_results(self):
+        payload = scenario_payload()
+        payload["testCase"]["scenarios"][0]["expectedResult"] = (
+            "목표 그리드 영역 최소 폭 88px 및 실적 영역 폭 164px로 적용되어 표시된다"
+        )
+
+        issues = find_user_facing_implementation_details(payload)
+
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0]["severity"], "required")
+        report = build_quality_report(payload)
+        self.assertEqual(report["soft_gate"]["status"], "block")
+        self.assertEqual(
+            report["metrics"]["implementation_detail_in_user_test_count"],
+            1,
+        )
+
     def test_finds_korean_and_english_semantic_duplicates(self):
         payload = valid_payload()
         payload["testCase"]["procedure"] = [
@@ -446,6 +520,305 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(report["soft_gate"]["status"], "pass")
         self.assertEqual(report["covered_anchors"], [])
         self.assertEqual(report["uncovered_anchors"], [])
+
+    def test_scenario_coverage_requires_action_and_result_in_the_same_row(self):
+        payload = scenario_payload()
+        payload["testCase"]["scenarios"][0].update(
+            {
+                "procedure": "비활성 상태 조건을 선택해 사용자 조회를 실행한다",
+                "expectedResult": "조회한 사용자 정보가 결과 화면에 표시된다",
+            }
+        )
+        payload["testCase"]["scenarios"][1].update(
+            {
+                "procedure": "활성 상태 조건을 선택해 사용자 조회를 실행한다",
+                "expectedResult": "비활성 상태의 사용자가 조회 결과에서 제외된다",
+            }
+        )
+
+        split_report = build_quality_report(
+            payload,
+            change_notes=["비활성 사용자는 조회 결과에서 제외"],
+        )
+
+        self.assertFalse(split_report["explicit_scenarios"]["inactive"]["covered"])
+        self.assertFalse(split_report["scenario_categories"]["negative"]["covered"])
+        self.assertEqual(
+            split_report["explicit_scenarios"]["inactive"][
+                "matched_scenario_indexes"
+            ],
+            [],
+        )
+
+        payload["testCase"]["scenarios"][0][
+            "expectedResult"
+        ] = "비활성 상태의 사용자가 조회 결과에서 제외된다"
+        paired_report = build_quality_report(
+            payload,
+            change_notes=["비활성 사용자는 조회 결과에서 제외"],
+        )
+
+        self.assertTrue(paired_report["explicit_scenarios"]["inactive"]["covered"])
+        self.assertTrue(paired_report["scenario_categories"]["negative"]["covered"])
+        self.assertEqual(
+            paired_report["explicit_scenarios"]["inactive"][
+                "matched_scenario_indexes"
+            ],
+            [0],
+        )
+
+    def test_scenario_kind_and_evidence_refs_do_not_self_cover_permission(self):
+        payload = scenario_payload()
+        payload["testCase"]["preconditions"] = []
+        payload["testCase"]["scenarios"][1] = {
+            "kind": "permission",
+            "title": "저장 보호 처리",
+            "procedure": "저장 버튼을 선택해 현재 내용을 전송한다",
+            "testData": "현재 편집 중인 데이터를 사용한다",
+            "expectedResult": "요청 전 데이터 상태가 그대로 유지된다",
+            "notes": "위 결과가 확인되면 의도한 상태 유지로 판단한다",
+            "evidenceRefs": ["PermissionSentinelX 권한 검증"],
+        }
+        # Transitional flat fields may coexist during parsing, but scenarios are
+        # the source of truth and these strings must not cover the provenance.
+        payload["testCase"]["procedure"] = ["PermissionSentinelX 권한 검증을 실행한다"]
+        payload["testCase"]["expectedResult"] = "PermissionSentinelX 권한 검증이 완료된다"
+
+        report = build_quality_report(
+            payload,
+            change_notes=["PermissionSentinelX 권한 검증"],
+        )
+
+        self.assertFalse(report["explicit_scenarios"]["permission"]["covered"])
+        self.assertFalse(report["scenario_categories"]["permission"]["covered"])
+        note_anchor = next(
+            anchor
+            for anchor in report["uncovered_anchors"]
+            if anchor["source"] == "change_note"
+        )
+        self.assertNotIn("permission", note_anchor["matched_terms"])
+        self.assertNotIn("sentinel", note_anchor["matched_terms"])
+
+    def test_optional_negative_requires_reference_in_selected_source_section(self):
+        payload = scenario_payload()
+        payload["testCase"]["scenarios"][1] = {
+            "kind": "permission",
+            "title": "저장 권한 거부",
+            "procedure": "편집 권한이 없는 계정으로 저장을 실행한다",
+            "testData": "편집 권한이 없는 계정 조건을 사용한다",
+            "expectedResult": "저장 요청이 거부되고 기존 데이터가 유지된다",
+            "notes": "위 결과가 확인되면 권한 방어가 정상으로 판단된다",
+            "evidenceRefs": ["REQUEST_ONLY_PERMISSION_GUARD"],
+        }
+        evidence = "\r\n".join(
+            (
+                "[개발 의뢰]",
+                "REQUEST_ONLY_PERMISSION_GUARD 조건을 검증한다",
+                "",
+                "[선택된 소스 근거]",
+                "src/service/UserService.java",
+                "ACTIVE 사용자 조회 조건",
+            )
+        )
+
+        report = build_quality_report(payload, evidence_text=evidence)
+
+        unsupported = [
+            issue
+            for issue in report["issues"]
+            if issue["code"] == "unsupported_scenario_evidence"
+        ]
+        self.assertEqual(len(unsupported), 1)
+        self.assertEqual(unsupported[0]["severity"], "required")
+        self.assertEqual(unsupported[0]["scenario_index"], 1)
+        self.assertEqual(
+            unsupported[0]["fields"],
+            ["testCase.scenarios[1].evidenceRefs"],
+        )
+        self.assertTrue(report["soft_gate"]["blocking"])
+        self.assertEqual(
+            report["metrics"]["unsupported_scenario_evidence_count"],
+            1,
+        )
+
+    def test_any_reference_in_selected_source_supports_optional_negative(self):
+        payload = scenario_payload()
+        payload["testCase"]["scenarios"][1] = {
+            "kind": "permission",
+            "title": "저장 권한 거부",
+            "procedure": "편집 권한이 없는 계정으로 저장을 실행한다",
+            "testData": "편집 권한이 없는 계정 조건을 사용한다",
+            "expectedResult": "저장 요청이 거부되고 기존 데이터가 유지된다",
+            "notes": "위 결과가 확인되면 권한 방어가 정상으로 판단된다",
+            "evidenceRefs": [
+                "REQUEST_ONLY_PERMISSION_GUARD",
+                "PermissionGate.java",
+            ],
+        }
+        evidence = (
+            "[개발 의뢰]\n"
+            "REQUEST_ONLY_PERMISSION_GUARD 조건을 검증한다\n\n"
+            "[선택된 소스 근거]\n"
+            "src/service/PermissionGate.java\n"
+            "편집 권한이 없으면 저장 요청을 거부한다"
+        )
+
+        report = build_quality_report(payload, evidence_text=evidence)
+
+        self.assertFalse(
+            any(
+                issue["code"] == "unsupported_scenario_evidence"
+                for issue in report["issues"]
+            )
+        )
+        self.assertEqual(
+            report["metrics"]["unsupported_scenario_evidence_count"],
+            0,
+        )
+
+    def test_source_evidence_falls_back_to_full_text_without_section_marker(self):
+        payload = scenario_payload()
+        payload["testCase"]["scenarios"][1]["evidenceRefs"] = [
+            "selectActiveUser"
+        ]
+
+        report = build_quality_report(
+            payload,
+            evidence_text="UserMapper.xml의 selectActiveUser 조건에서 비활성 사용자를 제외한다",
+        )
+
+        self.assertFalse(
+            any(
+                issue["code"] == "unsupported_scenario_evidence"
+                for issue in report["issues"]
+            )
+        )
+
+    def test_scenario_evidence_gate_ignores_none_success_and_legacy_payloads(self):
+        scenario = scenario_payload()
+        no_evidence_report = build_quality_report(scenario, evidence_text=None)
+        self.assertEqual(no_evidence_report, build_quality_report(scenario))
+        self.assertFalse(
+            any(
+                issue["code"] == "unsupported_scenario_evidence"
+                for issue in no_evidence_report["issues"]
+            )
+        )
+
+        success_only = scenario_payload()
+        success_only["testCase"]["scenarios"] = success_only["testCase"][
+            "scenarios"
+        ][:1]
+        success_report = build_quality_report(
+            success_only,
+            evidence_text="[선택된 소스 근거]\n관련 근거 없음",
+        )
+        self.assertFalse(
+            any(
+                issue["code"] == "unsupported_scenario_evidence"
+                for issue in success_report["issues"]
+            )
+        )
+
+        legacy = valid_payload()
+        legacy_report = build_quality_report(
+            legacy,
+            evidence_text="[선택된 소스 근거]\n관련 근거 없음",
+        )
+        self.assertEqual(legacy_report, build_quality_report(legacy))
+        self.assertFalse(
+            any(
+                issue["code"] == "unsupported_scenario_evidence"
+                for issue in legacy_report["issues"]
+            )
+        )
+
+    def test_scenario_field_quality_checks_use_indexed_fields(self):
+        payload = scenario_payload()
+        payload["testCase"]["scenarios"][1].update(
+            {
+                "procedure": "기능을 확인한다",
+                "testData": (
+                    "기준년도 2026 세션 조직코드 92886000 전사 조직코드 "
+                    "90124000을 사용한다"
+                ),
+                "expectedResult": (
+                    "저장값이 반영되고, 조회 목록이 갱신되며, 완료 알림이 표시된다"
+                ),
+            }
+        )
+
+        non_actionable_fields = [
+            issue["fields"][0]
+            for issue in find_non_actionable_test_steps(payload)
+        ]
+        data_issues = find_unnatural_test_data(payload)
+        result_issues = find_overloaded_expected_result(payload)
+
+        self.assertIn(
+            "testCase.scenarios[1].procedure",
+            non_actionable_fields,
+        )
+        self.assertEqual(
+            data_issues[0]["fields"],
+            ["testCase.scenarios[1].testData"],
+        )
+        self.assertEqual(
+            result_issues[0]["fields"],
+            ["testCase.scenarios[1].expectedResult"],
+        )
+
+    def test_scenario_procedure_result_overlap_is_checked_within_each_row(self):
+        payload = scenario_payload()
+        payload["testCase"]["scenarios"][1]["expectedResult"] = payload[
+            "testCase"
+        ]["scenarios"][0]["procedure"]
+
+        self.assertFalse(
+            any(
+                issue["code"] == "procedure_result_overlap"
+                for issue in find_step_count_mismatch(payload)
+            )
+        )
+
+        payload["testCase"]["scenarios"][0]["expectedResult"] = payload[
+            "testCase"
+        ]["scenarios"][0]["procedure"]
+        issues = find_step_count_mismatch(payload)
+
+        overlap = next(
+            issue for issue in issues if issue["code"] == "procedure_result_overlap"
+        )
+        self.assertEqual(
+            overlap["fields"],
+            [
+                "testCase.scenarios[0].procedure",
+                "testCase.scenarios[0].expectedResult",
+            ],
+        )
+
+    def test_empty_scenarios_do_not_fall_back_to_flat_coverage(self):
+        payload = valid_payload()
+        payload["testCase"]["scenarios"] = []
+
+        report = build_quality_report(
+            payload,
+            change_notes=["활성 사용자만 조회 결과에 표시"],
+        )
+
+        self.assertFalse(report["explicit_scenarios"]["active"]["covered"])
+        self.assertFalse(report["scenario_categories"]["normal"]["covered"])
+
+    def test_legacy_flat_response_keeps_explicit_scenario_coverage(self):
+        payload = valid_payload()
+
+        report = build_quality_report(
+            payload,
+            change_notes=["활성 사용자만 조회 결과에 표시"],
+        )
+
+        self.assertTrue(report["explicit_scenarios"]["active"]["covered"])
+        self.assertTrue(report["scenario_categories"]["normal"]["covered"])
 
 
 if __name__ == "__main__":

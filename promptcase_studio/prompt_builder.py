@@ -281,9 +281,9 @@ def _scan_summary(bundle: ScanBundle) -> str:
             f"- 인덱싱한 후보 파일: {bundle.scanned_files}개",
             f"- 제외한 파일: {bundle.excluded_files}개",
             f"- 후보 인덱스 잘림: {'예' if bundle.truncated else '아니오'}",
-            f"- 권장 테스트 흐름: {recommended_tests}개",
-            f"- 테스트 흐름 산정: {scope_reason}",
-            "- 테스트 흐름 상한: 5개이며 같은 동작의 계층별 파일 수는 하나의 흐름으로 통합",
+            f"- 근거 기반 독립 시나리오 후보: {recommended_tests}개",
+            f"- 시나리오 후보 산정: {scope_reason}",
+            "- 작성 목표: 약 3개, 허용 범위 1~5개이며 같은 동작의 계층별 파일은 하나로 통합",
             f"- 주의사항: {warning_text}",
         )
     )

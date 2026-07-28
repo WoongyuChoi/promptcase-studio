@@ -37,11 +37,60 @@ def valid_payload():
     }
 
 
+def scenario_payload():
+    return {
+        "documentTitle": "사용자관리시스템",
+        "testCase": {
+            "name": "사용자 조회 단위테스트",
+            "scenarios": [
+                {
+                    "kind": "success",
+                    "title": "활성 사용자 정상 조회",
+                    "procedure": "활성 사용자를 선택하고 조회 버튼을 눌러 결과를 확인한다",
+                    "testData": "목표 값 7.0과 현재 값 3.0을 사용한다",
+                    "expectedResult": "활성 사용자의 정보와 계산 결과가 화면에 표시된다",
+                    "evidenceRefs": ["UserService.java", "7.0", "3.0"],
+                },
+                {
+                    "kind": "validation",
+                    "title": "값이 없는 사용자 조회",
+                    "procedure": "현재 값이 없는 사용자를 선택하고 조회 결과를 확인한다",
+                    "testData": "",
+                    "expectedResult": "현재 값 영역이 비어 있고 계산 결과는 초기값으로 표시된다",
+                    "evidenceRefs": ["actualAmount == null"],
+                },
+                {
+                    "kind": "regression",
+                    "title": "조회 창 닫힘 회귀 확인",
+                    "procedure": "조회 작업을 마친 뒤 창을 닫고 목록 화면으로 돌아간다",
+                    "testData": "",
+                    "expectedResult": "조회 창이 닫히고 기존 목록 화면이 그대로 표시된다",
+                    "evidenceRefs": ["closePopup()"],
+                },
+            ],
+            "targetIds": ["USR1000"],
+            "targetNames": ["사용자 조회"],
+            "preconditions": ["조회 권한이 있는 계정으로 로그인되어 있어야 한다"],
+            "notes": (
+                "정상 입력과 빈 값 및 화면 복귀 결과가 모두 예상과 같으면 "
+                "사용자 조회 변경이 정상적으로 반영된 것으로 판단한다"
+            ),
+        },
+        "testResult": {
+            "processingDetails": [
+                {"title": "조회 조건 변경", "detail": "활성 상태와 빈 값 처리 반영"}
+            ],
+            "resultChecks": ["정상 조회와 빈 값 처리 결과 확인"],
+        },
+    }
+
+
 class ResponseParserTests(unittest.TestCase):
     def test_accepts_bom_and_whitespace_around_the_single_json_object(self):
         raw = "\ufeff  \n" + json.dumps(valid_payload(), ensure_ascii=False) + "\n  "
         result = parse_structured_response(raw)
         self.assertEqual(result["testCase"]["name"], "사용자 조회 단위테스트")
+        self.assertNotIn("scenarios", result["testCase"])
 
     def test_accepts_single_json_inside_code_fence_or_surrounding_explanation(self):
         raw = "```json\n" + json.dumps(valid_payload(), ensure_ascii=False) + "\n```"
@@ -434,6 +483,156 @@ class ResponseParserTests(unittest.TestCase):
                 payload["documentTitle"] = title
                 result = parse_structured_response(json.dumps(payload, ensure_ascii=False))
                 self.assertEqual(result["documentTitle"], "")
+
+    def test_accepts_grounded_scenarios_and_derives_legacy_fields(self):
+        payload = scenario_payload()
+        evidence = (
+            "사용자관리시스템 사용자 조회 USR1000 "
+            "UserService.java 목표 값 7.0 현재 값 3.0 "
+            "actualAmount == null closePopup()"
+        )
+
+        result = parse_structured_response(
+            json.dumps(payload, ensure_ascii=False),
+            evidence_text=evidence,
+        )
+
+        self.assertEqual(len(result["testCase"]["scenarios"]), 3)
+        self.assertEqual(
+            result["testCase"]["procedure"],
+            [item["procedure"] for item in payload["testCase"]["scenarios"]],
+        )
+        self.assertEqual(
+            result["testResult"]["testDetails"],
+            [item["expectedResult"] for item in payload["testCase"]["scenarios"]],
+        )
+        self.assertIn("7.0", result["testCase"]["testData"])
+        self.assertEqual(
+            result["testCase"]["notes"],
+            payload["testCase"]["notes"],
+        )
+
+    def test_rejects_css_measurements_in_user_facing_scenario_text(self):
+        payload = scenario_payload()
+        payload["testCase"]["scenarios"][0]["expectedResult"] = (
+            "목표 영역 최소 폭 88px과 실적 영역 폭 164px이 적용되어 표시된다"
+        )
+
+        with self.assertRaisesRegex(ResponseValidationError, "CSS 수치"):
+            parse_structured_response(
+                json.dumps(payload, ensure_ascii=False),
+                evidence_text=(
+                    "사용자관리시스템 사용자 조회 USR1000 "
+                    "UserService.java 목표 값 7.0 현재 값 3.0 "
+                    "actualAmount == null closePopup() 88px 164px"
+                ),
+            )
+
+    def test_accepts_one_success_scenario_without_forcing_negative_case(self):
+        payload = scenario_payload()
+        payload["testCase"]["scenarios"] = payload["testCase"]["scenarios"][:1]
+
+        result = parse_structured_response(
+            json.dumps(payload, ensure_ascii=False),
+            evidence_text=(
+                "사용자관리시스템 사용자 조회 USR1000 "
+                "UserService.java 목표 값 7.0 현재 값 3.0"
+            ),
+        )
+
+        self.assertEqual(
+            [item["kind"] for item in result["testCase"]["scenarios"]],
+            ["success"],
+        )
+
+    def test_requires_one_integrated_note_for_new_scenario_responses(self):
+        payload = scenario_payload()
+        payload["testCase"].pop("notes")
+
+        with self.assertRaisesRegex(ResponseValidationError, "종합한 비고"):
+            parse_structured_response(
+                json.dumps(payload, ensure_ascii=False),
+                evidence_text=(
+                    "사용자관리시스템 사용자 조회 USR1000 "
+                    "UserService.java 목표 값 7.0 현재 값 3.0 "
+                    "actualAmount == null closePopup()"
+                ),
+            )
+
+    def test_rejects_scenarios_without_success_case(self):
+        payload = scenario_payload()
+        payload["testCase"]["scenarios"] = payload["testCase"]["scenarios"][1:]
+
+        with self.assertRaisesRegex(ResponseValidationError, "success 정상 케이스"):
+            parse_structured_response(
+                json.dumps(payload, ensure_ascii=False),
+                evidence_text=(
+                    "사용자관리시스템 사용자 조회 USR1000 "
+                    "actualAmount == null closePopup()"
+                ),
+            )
+
+    def test_rejects_unknown_scenario_kind(self):
+        payload = scenario_payload()
+        payload["testCase"]["scenarios"][0]["kind"] = "negative"
+
+        with self.assertRaisesRegex(ResponseValidationError, "kind"):
+            parse_structured_response(
+                json.dumps(payload, ensure_ascii=False),
+                evidence_text=(
+                    "사용자관리시스템 사용자 조회 USR1000 "
+                    "UserService.java 목표 값 7.0 현재 값 3.0 "
+                    "actualAmount == null closePopup()"
+                ),
+            )
+
+    def test_rejects_invented_numeric_test_data(self):
+        payload = scenario_payload()
+        payload["testCase"]["scenarios"][0]["testData"] = (
+            "목표 값 7.0과 근거에 없는 현재 값 9999를 사용한다"
+        )
+
+        with self.assertRaisesRegex(ResponseValidationError, "9999"):
+            parse_structured_response(
+                json.dumps(payload, ensure_ascii=False),
+                evidence_text=(
+                    "사용자관리시스템 사용자 조회 USR1000 "
+                    "UserService.java 목표 값 7.0 현재 값 3.0 "
+                    "actualAmount == null closePopup()"
+                ),
+            )
+
+    def test_rejects_invented_code_like_test_data(self):
+        payload = scenario_payload()
+        payload["testCase"]["scenarios"][0]["testData"] = (
+            "근거에 없는 UNSEEN_ACCOUNT_9999 조건을 사용한다"
+        )
+
+        with self.assertRaisesRegex(ResponseValidationError, "UNSEEN_ACCOUNT_9999"):
+            parse_structured_response(
+                json.dumps(payload, ensure_ascii=False),
+                evidence_text=(
+                    "사용자관리시스템 사용자 조회 USR1000 "
+                    "UserService.java 목표 값 7.0 현재 값 3.0 "
+                    "actualAmount == null closePopup()"
+                ),
+            )
+
+    def test_rejects_scenario_evidence_reference_not_found_in_input(self):
+        payload = scenario_payload()
+        payload["testCase"]["scenarios"][1]["evidenceRefs"] = [
+            "UnknownGuard.java"
+        ]
+
+        with self.assertRaisesRegex(ResponseValidationError, "UnknownGuard.java"):
+            parse_structured_response(
+                json.dumps(payload, ensure_ascii=False),
+                evidence_text=(
+                    "사용자관리시스템 사용자 조회 USR1000 "
+                    "UserService.java 목표 값 7.0 현재 값 3.0 "
+                    "actualAmount == null closePopup()"
+                ),
+            )
 
     def test_accepts_grounded_cross_platform_target_id_formats(self):
         for target_id in (

@@ -4,6 +4,7 @@ import copy
 import io
 import re
 import zipfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
@@ -30,6 +31,7 @@ PROGRAM_ROW_HEIGHT_POINTS = 15.0  # Excel row height equivalent to about 20 pixe
 MAX_TEST_CASE_STEPS = 5
 MAX_EXPECTED_RESULT_LINES = 2
 MAX_TEST_RESULT_ITEMS = 5
+MAX_SCENARIO_ROW_HEIGHT_POINTS = 409.0
 CAPTURE_ROW_HEIGHT_POINTS = 280.0
 CAPTURE_GUIDANCE = "캡처 이미지를 여기에 붙여 넣으세요"
 
@@ -557,24 +559,65 @@ def _numbered(items: list[str]) -> str:
     return "\n".join(f"{index}. {item}" for index, item in enumerate(items, 1))
 
 
+def _scenario_items(value: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        item
+        for item in value
+        if isinstance(item, Mapping)
+    ][:MAX_TEST_CASE_STEPS]
+
+
+def _scenario_field(
+    scenarios: list[Mapping[str, Any]],
+    field: str,
+    *,
+    empty_value: str = "",
+) -> str:
+    lines: list[str] = []
+    for index, scenario in enumerate(scenarios, 1):
+        value = str(scenario.get(field, "") or "").strip() or empty_value
+        lines.append(f"{index}. {value}")
+    return "\n".join(lines)
+
+
 def _write_test_case(
     sheet: ET.Element,
     data: dict[str, Any],
     shared_strings: list[str],
     style_map: dict[int, int],
 ) -> None:
-    procedure = _limited_strings(data["procedure"], MAX_TEST_CASE_STEPS)
+    scenarios = _scenario_items(data.get("scenarios"))
     preconditions = _limited_strings(data["preconditions"], MAX_TEST_CASE_STEPS)
+    if scenarios:
+        procedure_text = _scenario_field(scenarios, "procedure")
+        test_data_text = _scenario_field(
+            scenarios,
+            "testData",
+            empty_value="별도 테스트 데이터 없음",
+        )
+        expected_result_text = _scenario_field(scenarios, "expectedResult")
+        notes_text = str(data.get("notes", "") or "").strip()
+    else:
+        procedure = _limited_strings(data["procedure"], MAX_TEST_CASE_STEPS)
+        procedure_text = _numbered(procedure)
+        test_data_text = data["testData"]
+        expected_result_text = _limit_lines(
+            data["expectedResult"],
+            MAX_EXPECTED_RESULT_LINES,
+        )
+        notes_text = data.get("notes", "")
     field_values = {
         "name": data["name"],
         "type": "단위테스트",
-        "procedure": _numbered(procedure),
+        "procedure": procedure_text,
         "target_ids": ", ".join(data["targetIds"]),
         "target_names": ", ".join(data["targetNames"]),
         "preconditions": _numbered(preconditions),
-        "test_data": data["testData"],
-        "expected_result": _limit_lines(data["expectedResult"], MAX_EXPECTED_RESULT_LINES),
-        "notes": data.get("notes", ""),
+        "test_data": test_data_text,
+        "expected_result": expected_result_text,
+        "notes": notes_text,
     }
     aliases = {
         "name": ("name", "testcase_name", "test_case_name"),
@@ -608,13 +651,47 @@ def _write_test_case(
         if not _aliases_used(used, aliases[field]):
             _set_text(sheet, reference, field_values[field], style_map)
     _set_row_height(sheet, 3, field_values["name"], 19.95, 75, 48)
-    _set_row_height(sheet, 5, field_values["procedure"], 79.95, 96.5, 52)
     _set_row_height(sheet, 6, field_values["target_ids"], 19.95, 150, 52)
     _set_row_height(sheet, 7, field_values["target_names"], 19.95, 150, 48)
     _set_row_height(sheet, 8, field_values["preconditions"], 79.95, 96.5, 52)
-    _set_row_height(sheet, 9, field_values["test_data"], 19.95, 105, 48)
-    _set_row_height(sheet, 10, field_values["expected_result"], 30, 47, 52)
-    _set_row_height(sheet, 11, field_values["notes"], 19.95, 90, 52)
+    if scenarios:
+        _set_row_height(
+            sheet,
+            5,
+            field_values["procedure"],
+            79.95,
+            MAX_SCENARIO_ROW_HEIGHT_POINTS,
+            52,
+        )
+        _set_row_height(
+            sheet,
+            9,
+            field_values["test_data"],
+            19.95,
+            MAX_SCENARIO_ROW_HEIGHT_POINTS,
+            48,
+        )
+        _set_row_height(
+            sheet,
+            10,
+            field_values["expected_result"],
+            30,
+            MAX_SCENARIO_ROW_HEIGHT_POINTS,
+            52,
+        )
+        _set_row_height(
+            sheet,
+            11,
+            field_values["notes"],
+            19.95,
+            MAX_SCENARIO_ROW_HEIGHT_POINTS,
+            52,
+        )
+    else:
+        _set_row_height(sheet, 5, field_values["procedure"], 79.95, 96.5, 52)
+        _set_row_height(sheet, 9, field_values["test_data"], 19.95, 105, 48)
+        _set_row_height(sheet, 10, field_values["expected_result"], 30, 47, 52)
+        _set_row_height(sheet, 11, field_values["notes"], 19.95, 90, 52)
 
 
 def _write_test_result(

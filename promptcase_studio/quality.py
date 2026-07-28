@@ -9,7 +9,7 @@ from typing import Any
 from promptcase_studio.models import ChangeItem
 
 
-REPORT_VERSION = "1.3"
+REPORT_VERSION = "1.4"
 
 _WORD_RE = re.compile(r"[A-Za-z]+(?:\d+[A-Za-z0-9]*)?|\d+|[가-힣]+")
 _CAMEL_BOUNDARY_1 = re.compile(r"([A-Z]+)([A-Z][a-z])")
@@ -392,6 +392,27 @@ _EXPECTED_OUTCOME_VERB = re.compile(
     r"(?:되지\s*않|되지|되는|된다|된|되|돼|하지|한다|한|하)",
     re.IGNORECASE,
 )
+_USER_FACING_IMPLEMENTATION_DETAIL = re.compile(
+    r"(?:\b\d+(?:\.\d+)?\s*(?:px|rem|em|vw|vh)(?![A-Za-z])|"
+    r"\b(?:minmax|gridTemplateColumns|grid-template-columns|"
+    r"font-size|line-height)\b)",
+    re.IGNORECASE,
+)
+_GENERIC_TEST_DATA_WORDING = re.compile(
+    r"(?:데이터|설정)(?:를|을)?\s*(?:사용한다)?$",
+    re.IGNORECASE,
+)
+_IMPLEMENTATION_TEST_DATA_NAME = re.compile(
+    r"\b[A-Z][A-Za-z0-9]*(?:Config|Modal|Component|Props|State|Handler|"
+    r"Service|Controller|Repository)\b",
+)
+_TEST_DATA_VALUE_OR_CONDITION = re.compile(
+    r"(?:[-+]?\d+(?:[.,]\d+)*|빈\s*값|미입력|누락|없(?:는|음|다)|"
+    r"최신|기존|최소|최대|경계|0\s*값|유효|무효|정상|오류|에러|"
+    r"활성|비활성|권한|변경\s*없음|중복|초과|미만|이상|이하|"
+    r"\b(?:active|inactive|valid|invalid|null|empty|true|false)\b)",
+    re.IGNORECASE,
+)
 
 
 def _split_identifier(value: str) -> str:
@@ -478,6 +499,31 @@ def _string_sequence(value: Any) -> list[str]:
     return [item.strip() for item in value if isinstance(item, str) and item.strip()]
 
 
+def _uses_scenarios(structured: Mapping[str, Any]) -> bool:
+    test_case = structured.get("testCase")
+    return isinstance(test_case, Mapping) and "scenarios" in test_case
+
+
+def _scenario_rows(
+    structured: Mapping[str, Any],
+) -> list[tuple[int, Mapping[str, Any]]]:
+    test_case = structured.get("testCase")
+    case = test_case if isinstance(test_case, Mapping) else {}
+    scenarios = case.get("scenarios")
+    if not isinstance(scenarios, Sequence) or isinstance(scenarios, (str, bytes)):
+        return []
+    return [
+        (index, item)
+        for index, item in enumerate(scenarios)
+        if isinstance(item, Mapping)
+    ]
+
+
+def _scenario_text(item: Mapping[str, Any], key: str) -> str:
+    value = item.get(key)
+    return value.strip() if isinstance(value, str) else ""
+
+
 def _document_lists(structured: Mapping[str, Any]) -> list[tuple[str, list[str]]]:
     test_case = structured.get("testCase")
     test_result = structured.get("testResult")
@@ -500,6 +546,29 @@ def _document_lists(structured: Mapping[str, Any]) -> list[tuple[str, list[str]]
             )
             if text:
                 processing_values.append(text)
+    if _uses_scenarios(structured):
+        scenario_rows = _scenario_rows(structured)
+        return [
+            (
+                "testCase.scenarios.procedure",
+                [
+                    text
+                    for _, item in scenario_rows
+                    if (text := _scenario_text(item, "procedure"))
+                ],
+            ),
+            (
+                "testCase.scenarios.expectedResult",
+                [
+                    text
+                    for _, item in scenario_rows
+                    if (text := _scenario_text(item, "expectedResult"))
+                ],
+            ),
+            ("testCase.preconditions", _string_sequence(case.get("preconditions"))),
+            ("testResult.processingDetails", processing_values),
+            ("testResult.resultChecks", _string_sequence(result.get("resultChecks"))),
+        ]
     return [
         ("testCase.procedure", _string_sequence(case.get("procedure"))),
         ("testCase.preconditions", _string_sequence(case.get("preconditions"))),
@@ -511,6 +580,15 @@ def _document_lists(structured: Mapping[str, Any]) -> list[tuple[str, list[str]]
 
 def find_semantic_duplicates(structured: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Return likely within-field paraphrase duplicates as non-blocking issues."""
+
+    def indexed_field(field: str, index: int) -> str:
+        scenario_prefix = "testCase.scenarios."
+        if field.startswith(scenario_prefix):
+            return (
+                f"testCase.scenarios[{index}]."
+                f"{field.removeprefix(scenario_prefix)}"
+            )
+        return f"{field}[{index}]"
 
     issues: list[dict[str, Any]] = []
     for field, values in _document_lists(structured):
@@ -524,7 +602,10 @@ def find_semantic_duplicates(structured: Mapping[str, Any]) -> list[dict[str, An
                     {
                         "code": "semantic_duplicate",
                         "severity": "warning",
-                        "fields": [f"{field}[{left_index}]", f"{field}[{right_index}]"],
+                        "fields": [
+                            indexed_field(field, left_index),
+                            indexed_field(field, right_index),
+                        ],
                         "similarity": round(score, 3),
                         "message": "서로 다른 검증 의도인지 확인이 필요한 의미상 유사 문장이 있습니다",
                         "examples": [left, right],
@@ -566,30 +647,41 @@ def find_non_actionable_test_steps(structured: Mapping[str, Any]) -> list[dict[s
     case = test_case if isinstance(test_case, Mapping) else {}
     result = test_result if isinstance(test_result, Mapping) else {}
     issues: list[dict[str, Any]] = []
-    fields = (
-        ("testCase.procedure", _string_sequence(case.get("procedure"))),
-        ("testResult.testDetails", _string_sequence(result.get("testDetails"))),
-    )
-    for field, values in fields:
-        for index, text in enumerate(values):
-            weak_confirmation = bool(_WEAK_CONFIRMATION.search(text))
-            no_operation_or_outcome = not (
-                _ACTIONABLE_OPERATION.search(text) or _OBSERVABLE_OUTCOME.search(text)
+    if _uses_scenarios(structured):
+        field_values = [
+            (f"testCase.scenarios[{index}].{key}", text)
+            for index, item in _scenario_rows(structured)
+            for key in ("procedure", "expectedResult")
+            if (text := _scenario_text(item, key))
+        ]
+    else:
+        field_values = [
+            (f"{field}[{index}]", text)
+            for field, values in (
+                ("testCase.procedure", _string_sequence(case.get("procedure"))),
+                ("testResult.testDetails", _string_sequence(result.get("testDetails"))),
             )
-            if not weak_confirmation and not no_operation_or_outcome:
-                continue
-            issues.append(
-                {
-                    "code": "non_actionable_test_step",
-                    "severity": "review",
-                    "fields": [f"{field}[{index}]"],
-                    "message": (
-                        "확인 대상만 적지 말고 입력, 선택, 저장, 조회, 다운로드 같은 실제 조작과 "
-                        "사용자가 판정할 결과를 구체적으로 작성해야 합니다"
-                    ),
-                    "examples": [text],
-                }
-            )
+            for index, text in enumerate(values)
+        ]
+    for field, text in field_values:
+        weak_confirmation = bool(_WEAK_CONFIRMATION.search(text))
+        no_operation_or_outcome = not (
+            _ACTIONABLE_OPERATION.search(text) or _OBSERVABLE_OUTCOME.search(text)
+        )
+        if not weak_confirmation and not no_operation_or_outcome:
+            continue
+        issues.append(
+            {
+                "code": "non_actionable_test_step",
+                "severity": "review",
+                "fields": [field],
+                "message": (
+                    "확인 대상만 적지 말고 입력, 선택, 저장, 조회, 다운로드 같은 실제 조작과 "
+                    "사용자가 판정할 결과를 구체적으로 작성해야 합니다"
+                ),
+                "examples": [text],
+            }
+        )
     return issues
 
 
@@ -598,32 +690,104 @@ def find_unnatural_test_data(structured: Mapping[str, Any]) -> list[dict[str, An
 
     test_case = structured.get("testCase")
     case = test_case if isinstance(test_case, Mapping) else {}
-    test_data = case.get("testData")
-    if not isinstance(test_data, str) or not test_data.strip():
-        return []
-    matches = list(_DATA_LABEL_VALUE.finditer(test_data))
-    if len(matches) < 2:
-        return []
-    missing_separator = any(
-        not _NATURAL_DATA_SEPARATOR.search(
-            test_data[left.end() : right.start()]
+    if _uses_scenarios(structured):
+        values = [
+            (f"testCase.scenarios[{index}].testData", text)
+            for index, item in _scenario_rows(structured)
+            if (text := _scenario_text(item, "testData"))
+        ]
+    else:
+        test_data = case.get("testData")
+        values = (
+            [("testCase.testData", test_data.strip())]
+            if isinstance(test_data, str) and test_data.strip()
+            else []
         )
-        for left, right in zip(matches, matches[1:])
-    )
-    if not missing_separator:
+    issues: list[dict[str, Any]] = []
+    for field, test_data in values:
+        matches = list(_DATA_LABEL_VALUE.finditer(test_data))
+        if len(matches) < 2:
+            continue
+        missing_separator = any(
+            not _NATURAL_DATA_SEPARATOR.search(test_data[left.end() : right.start()])
+            for left, right in zip(matches, matches[1:])
+        )
+        if not missing_separator:
+            continue
+        issues.append(
+            {
+                "code": "keyword_like_test_data",
+                "severity": "review",
+                "fields": [field],
+                "message": (
+                    "테스트 데이터의 식별 가능한 값은 한국어 조사와 쉼표로 구분해 "
+                    "키워드 나열이 아닌 자연스러운 문장으로 작성해야 합니다"
+                ),
+                "examples": [test_data],
+            }
+        )
+    return issues
+
+
+def find_non_executable_test_data(
+    structured: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Find implementation names and value-free labels presented as test data."""
+
+    if not _uses_scenarios(structured):
         return []
-    return [
-        {
-            "code": "keyword_like_test_data",
-            "severity": "review",
-            "fields": ["testCase.testData"],
-            "message": (
-                "테스트 데이터의 식별 가능한 값은 한국어 조사와 쉼표로 구분해 "
-                "키워드 나열이 아닌 자연스러운 문장으로 작성해야 합니다"
-            ),
-            "examples": [test_data],
-        }
-    ]
+    issues: list[dict[str, Any]] = []
+    for index, item in _scenario_rows(structured):
+        test_data = _scenario_text(item, "testData")
+        if not test_data or _TEST_DATA_VALUE_OR_CONDITION.search(test_data):
+            continue
+        if not (
+            _GENERIC_TEST_DATA_WORDING.search(test_data)
+            or _IMPLEMENTATION_TEST_DATA_NAME.search(test_data)
+        ):
+            continue
+        issues.append(
+            {
+                "code": "non_executable_test_data",
+                "severity": "required",
+                "fields": [f"testCase.scenarios[{index}].testData"],
+                "message": (
+                    "테스트 데이터에는 구현 설정명이나 포괄적인 데이터 이름 대신 "
+                    "담당자가 입력하거나 선택할 필드 값 또는 빈 값과 경계 조건을 작성해야 합니다"
+                ),
+                "examples": [test_data],
+            }
+        )
+    return issues
+
+
+def find_user_facing_implementation_details(
+    structured: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Keep CSS measurements and implementation properties out of user tests."""
+
+    if not _uses_scenarios(structured):
+        return []
+    issues: list[dict[str, Any]] = []
+    for index, item in _scenario_rows(structured):
+        for key in ("procedure", "testData", "expectedResult"):
+            text = _scenario_text(item, key)
+            match = _USER_FACING_IMPLEMENTATION_DETAIL.search(text)
+            if match is None:
+                continue
+            issues.append(
+                {
+                    "code": "implementation_detail_in_user_test",
+                    "severity": "required",
+                    "fields": [f"testCase.scenarios[{index}].{key}"],
+                    "message": (
+                        "CSS 수치와 구현 속성은 사용자 테스트에서 제거하고 잘림과 겹침 및 "
+                        "정렬처럼 화면에서 판정할 수 있는 결과로 작성해야 합니다"
+                    ),
+                    "examples": [text],
+                }
+            )
+    return issues
 
 
 def find_overloaded_expected_result(structured: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -631,28 +795,69 @@ def find_overloaded_expected_result(structured: Mapping[str, Any]) -> list[dict[
 
     test_case = structured.get("testCase")
     case = test_case if isinstance(test_case, Mapping) else {}
-    expected_result = case.get("expectedResult")
-    if not isinstance(expected_result, str) or not expected_result.strip():
-        return []
-    outcome_count = len(list(_EXPECTED_OUTCOME_VERB.finditer(expected_result)))
-    if outcome_count <= 2:
-        return []
-    return [
-        {
-            "code": "overloaded_expected_result",
-            "severity": "review",
-            "fields": ["testCase.expectedResult"],
-            "message": (
-                "예상결과는 핵심 관찰 결과 한 개 또는 직접 연결된 두 개만 남겨 두 줄 분량 안으로 작성해야 합니다"
-            ),
-            "outcome_count": outcome_count,
-            "examples": [expected_result],
-        }
-    ]
+    if _uses_scenarios(structured):
+        values = [
+            (f"testCase.scenarios[{index}].expectedResult", text)
+            for index, item in _scenario_rows(structured)
+            if (text := _scenario_text(item, "expectedResult"))
+        ]
+    else:
+        expected_result = case.get("expectedResult")
+        values = (
+            [("testCase.expectedResult", expected_result.strip())]
+            if isinstance(expected_result, str) and expected_result.strip()
+            else []
+        )
+    issues: list[dict[str, Any]] = []
+    for field, expected_result in values:
+        outcome_count = len(list(_EXPECTED_OUTCOME_VERB.finditer(expected_result)))
+        if outcome_count <= 2:
+            continue
+        issues.append(
+            {
+                "code": "overloaded_expected_result",
+                "severity": "review",
+                "fields": [field],
+                "message": (
+                    "예상결과는 핵심 관찰 결과 한 개 또는 직접 연결된 두 개만 남겨 두 줄 분량 안으로 작성해야 합니다"
+                ),
+                "outcome_count": outcome_count,
+                "examples": [expected_result],
+            }
+        )
+    return issues
 
 
 def find_step_count_mismatch(structured: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Report step alignment problems as reviewable, not structural."""
+
+    if _uses_scenarios(structured):
+        issues: list[dict[str, Any]] = []
+        for index, item in _scenario_rows(structured):
+            procedure = _scenario_text(item, "procedure")
+            expected_result = _scenario_text(item, "expectedResult")
+            if (
+                procedure
+                and expected_result
+                and re.sub(r"\s+", " ", procedure).casefold()
+                == re.sub(r"\s+", " ", expected_result).casefold()
+            ):
+                issues.append(
+                    {
+                        "code": "procedure_result_overlap",
+                        "severity": "review",
+                        "fields": [
+                            f"testCase.scenarios[{index}].procedure",
+                            f"testCase.scenarios[{index}].expectedResult",
+                        ],
+                        "message": (
+                            "같은 시나리오의 테스트 절차와 예상결과가 같은 문장이라 "
+                            "실행과 판정 기준의 역할 구분을 검토해야 합니다"
+                        ),
+                        "examples": [procedure],
+                    }
+                )
+        return issues
 
     test_case = structured.get("testCase")
     test_result = structured.get("testResult")
@@ -707,17 +912,30 @@ def find_scope_inflation(
     test_result = structured.get("testResult")
     case = test_case if isinstance(test_case, Mapping) else {}
     result = test_result if isinstance(test_result, Mapping) else {}
-    counts = {
-        "testCase.procedure": len(_string_sequence(case.get("procedure"))),
-        "testCase.preconditions": len(_string_sequence(case.get("preconditions"))),
-        "testResult.processingDetails": len(
-            result.get("processingDetails")
-            if isinstance(result.get("processingDetails"), Sequence)
-            and not isinstance(result.get("processingDetails"), (str, bytes))
-            else []
-        ),
-        "testResult.testDetails": len(_string_sequence(result.get("testDetails"))),
-    }
+    counts = (
+        {
+            "testCase.scenarios": len(_scenario_rows(structured)),
+            "testCase.preconditions": len(_string_sequence(case.get("preconditions"))),
+            "testResult.processingDetails": len(
+                result.get("processingDetails")
+                if isinstance(result.get("processingDetails"), Sequence)
+                and not isinstance(result.get("processingDetails"), (str, bytes))
+                else []
+            ),
+        }
+        if _uses_scenarios(structured)
+        else {
+            "testCase.procedure": len(_string_sequence(case.get("procedure"))),
+            "testCase.preconditions": len(_string_sequence(case.get("preconditions"))),
+            "testResult.processingDetails": len(
+                result.get("processingDetails")
+                if isinstance(result.get("processingDetails"), Sequence)
+                and not isinstance(result.get("processingDetails"), (str, bytes))
+                else []
+            ),
+            "testResult.testDetails": len(_string_sequence(result.get("testDetails"))),
+        }
+    )
     inflated = [field for field, count in counts.items() if count > 3]
     if not inflated:
         return []
@@ -751,10 +969,45 @@ def _all_document_strings(value: Any) -> list[str]:
 def _reviewable_document_strings(structured: Mapping[str, Any]) -> list[str]:
     # programInfo is deterministic local metadata. File names and change types
     # listed there must not make an otherwise missing scenario look covered.
+    test_case = structured.get("testCase")
+    if isinstance(test_case, Mapping) and "scenarios" in test_case:
+        # Scenario kind and evidenceRefs are control/provenance metadata. Feeding
+        # them back into the coverage token pool would let a row declare itself
+        # covered merely by saying kind=permission or copying source text into
+        # evidenceRefs without expressing the condition in its action/result.
+        visible_case = {
+            key: test_case.get(key)
+            for key in ("name", "targetIds", "targetNames", "preconditions", "notes")
+            if key in test_case
+        }
+        visible_case["scenarios"] = [
+            {
+                key: item.get(key)
+                for key in (
+                    "title",
+                    "procedure",
+                    "testData",
+                    "expectedResult",
+                )
+                if key in item
+            }
+            for _, item in _scenario_rows(structured)
+        ]
+    else:
+        visible_case = test_case
+    test_result = structured.get("testResult")
+    if _uses_scenarios(structured) and isinstance(test_result, Mapping):
+        visible_result = {
+            key: test_result.get(key)
+            for key in ("processingDetails", "resultChecks")
+            if key in test_result
+        }
+    else:
+        visible_result = test_result
     selected = {
-        key: structured.get(key)
-        for key in ("documentTitle", "testCase", "testResult")
-        if key in structured
+        "documentTitle": structured.get("documentTitle"),
+        "testCase": visible_case,
+        "testResult": visible_result,
     }
     return _all_document_strings(selected)
 
@@ -783,18 +1036,21 @@ def _explicit_scenarios(
 
     _all_lines, narrative_lines = _explicit_note_lines(change_notes)
     source_text = "\n".join(narrative_lines)
-    test_case = structured.get("testCase")
-    case = test_case if isinstance(test_case, Mapping) else {}
-    test_result = structured.get("testResult")
-    result = test_result if isinstance(test_result, Mapping) else {}
-    procedure_rows = _string_sequence(case.get("procedure"))
-    outcome_rows = [
-        *_string_sequence(result.get("testDetails")),
-        *_string_sequence(result.get("resultChecks")),
-    ]
-    expected_result = case.get("expectedResult")
-    if isinstance(expected_result, str) and expected_result.strip():
-        outcome_rows.append(expected_result.strip())
+    scenario_mode = _uses_scenarios(structured)
+    scenario_rows = _scenario_rows(structured) if scenario_mode else []
+    if not scenario_mode:
+        test_case = structured.get("testCase")
+        case = test_case if isinstance(test_case, Mapping) else {}
+        test_result = structured.get("testResult")
+        result = test_result if isinstance(test_result, Mapping) else {}
+        procedure_rows = _string_sequence(case.get("procedure"))
+        outcome_rows = [
+            *_string_sequence(result.get("testDetails")),
+            *_string_sequence(result.get("resultChecks")),
+        ]
+        expected_result = case.get("expectedResult")
+        if isinstance(expected_result, str) and expected_result.strip():
+            outcome_rows.append(expected_result.strip())
 
     scenarios: dict[str, dict[str, Any]] = {}
     for key, rule in _EXPLICIT_SCENARIO_RULES.items():
@@ -803,19 +1059,43 @@ def _explicit_scenarios(
             continue
         procedure_pattern = rule["procedure"]
         outcome_pattern = rule["outcome"]
-        procedure_matches = [row for row in procedure_rows if procedure_pattern.search(row)]
-        outcome_matches = [row for row in outcome_rows if outcome_pattern.search(row)]
+        if scenario_mode:
+            paired_matches = [
+                (index, procedure, outcome)
+                for index, item in scenario_rows
+                if (procedure := _scenario_text(item, "procedure"))
+                and (outcome := _scenario_text(item, "expectedResult"))
+                and procedure_pattern.search(procedure)
+                and outcome_pattern.search(outcome)
+            ]
+            procedure_matches = [row[1] for row in paired_matches]
+            outcome_matches = [row[2] for row in paired_matches]
+            matched_scenario_indexes = [row[0] for row in paired_matches]
+        else:
+            procedure_matches = [
+                row for row in procedure_rows if procedure_pattern.search(row)
+            ]
+            outcome_matches = [
+                row for row in outcome_rows if outcome_pattern.search(row)
+            ]
+            matched_scenario_indexes = []
         scenarios[key] = {
             "scenario": key,
             "label": str(rule["label"]),
             "required": True,
-            "covered": bool(procedure_matches and outcome_matches),
+            "covered": (
+                bool(matched_scenario_indexes)
+                if scenario_mode
+                else bool(procedure_matches and outcome_matches)
+            ),
             "procedure_matches": procedure_matches[:3],
             "outcome_matches": outcome_matches[:3],
             "signal_sources": [
                 line for line in narrative_lines if source_pattern.search(line)
             ][:3],
         }
+        if scenario_mode:
+            scenarios[key]["matched_scenario_indexes"] = matched_scenario_indexes[:3]
     return scenarios
 
 
@@ -1000,6 +1280,55 @@ def _cover_anchor(anchor: Mapping[str, Any], document_tokens: set[str]) -> dict[
     return result
 
 
+_CATEGORY_EXPLICIT_RULE_KEYS = {
+    "boundary": "boundary",
+    "permission": "permission",
+    "error": "error",
+    "deletion": "delete",
+}
+_NEGATIVE_SCENARIO_PROCEDURE = re.compile(
+    rf"(?:{_CATEGORY_SIGNAL_PATTERNS['negative'].pattern}|"
+    r"ACTIVE\s*상태(?:가|는)?\s*아닌|not\s+active)",
+    re.IGNORECASE,
+)
+_NEGATIVE_SCENARIO_OUTCOME = re.compile(
+    r"없|미입력|누락|중복|잘못|불가|거부|제외|비활성|차단|저장되지|"
+    r"변경되지|유지|알림|경고|메시지|오류|에러|실패|"
+    r"missing|duplicate|invalid|reject|deny|exclude|block|unchanged|"
+    r"alert|warning|error|failure",
+    re.IGNORECASE,
+)
+
+
+def _scenario_category_pair_matches(
+    category: str,
+    item: Mapping[str, Any],
+) -> bool:
+    """Require a category's action and outcome signals in the same scenario row."""
+
+    procedure = _scenario_text(item, "procedure")
+    expected_result = _scenario_text(item, "expectedResult")
+    if not procedure or not expected_result:
+        return False
+    explicit_rule_key = _CATEGORY_EXPLICIT_RULE_KEYS.get(category)
+    if explicit_rule_key:
+        rule = _EXPLICIT_SCENARIO_RULES[explicit_rule_key]
+        return bool(
+            rule["procedure"].search(procedure)
+            and rule["outcome"].search(expected_result)
+        )
+    if category == "negative":
+        return bool(
+            _NEGATIVE_SCENARIO_PROCEDURE.search(procedure)
+            and _NEGATIVE_SCENARIO_OUTCOME.search(expected_result)
+        )
+    coverage_pattern = _CATEGORY_COVERAGE_PATTERNS[category]
+    return bool(
+        coverage_pattern.search(procedure)
+        and coverage_pattern.search(expected_result)
+    )
+
+
 def _scenario_categories(
     structured: Mapping[str, Any],
     changes: Sequence[ChangeItem | Mapping[str, Any]],
@@ -1020,6 +1349,56 @@ def _scenario_categories(
             )
         )
     source_rows = [*note_rows, *change_rows]
+    if _uses_scenarios(structured):
+        scenario_rows = _scenario_rows(structured)
+        categories: dict[str, dict[str, Any]] = {}
+        normal_detected = bool(source_rows or changes)
+        normal_matches = [
+            index
+            for index, item in scenario_rows
+            if _scenario_text(item, "kind") == "success"
+            and _scenario_text(item, "procedure")
+            and _scenario_text(item, "expectedResult")
+        ]
+        categories["normal"] = {
+            "label": _CATEGORY_LABELS["normal"],
+            "detected": normal_detected,
+            "covered": normal_detected and bool(normal_matches),
+            "signal_sources": source_rows[:6] if normal_detected else [],
+            "required": bool(explicit_note_rows),
+            "output_matches": [
+                f"testCase.scenarios[{index}]" for index in normal_matches[:8]
+            ],
+        }
+        for key, label in _CATEGORY_LABELS.items():
+            if key == "normal":
+                continue
+            signal_pattern = _CATEGORY_SIGNAL_PATTERNS[key]
+            signal_sources = [
+                row for row in source_rows if signal_pattern.search(row)
+            ]
+            explicit_sources = [
+                row for row in explicit_note_rows if signal_pattern.search(row)
+            ]
+            detected = bool(signal_sources)
+            matched_indexes = [
+                index
+                for index, item in scenario_rows
+                if _scenario_category_pair_matches(key, item)
+            ]
+            categories[key] = {
+                "label": label,
+                "detected": detected,
+                "covered": detected and bool(matched_indexes),
+                "signal_sources": signal_sources[:6],
+                "required": bool(explicit_sources),
+                "output_matches": [
+                    f"testCase.scenarios[{index}]"
+                    for index in matched_indexes[:8]
+                ],
+            }
+        return categories
+
     output_rows = _reviewable_document_strings(structured)
     output_text = "\n".join(output_rows)
     procedure_count = len(
@@ -1062,10 +1441,63 @@ def _scenario_categories(
     return categories
 
 
+_SELECTED_SOURCE_SECTION_MARKER = re.compile(
+    r"^[ \t]*(?:#{1,6}[ \t]+)?(?:\[[ \t]*)?선택된 소스 근거"
+    r"(?:[ \t]*\])?[ \t]*\r?$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+
+def _selected_source_evidence(evidence_text: str) -> str:
+    marker = _SELECTED_SOURCE_SECTION_MARKER.search(evidence_text)
+    source_text = evidence_text[marker.end() :] if marker else evidence_text
+    return _SPACE_RE.sub(" ", source_text).strip().casefold()
+
+
+def _unsupported_scenario_evidence(
+    structured: Mapping[str, Any],
+    evidence_text: str | None,
+) -> list[dict[str, Any]]:
+    """Find optional non-success scenarios grounded only outside selected source."""
+
+    if evidence_text is None or not _uses_scenarios(structured):
+        return []
+    selected_source = _selected_source_evidence(evidence_text)
+    issues: list[dict[str, Any]] = []
+    for index, item in _scenario_rows(structured):
+        kind = _scenario_text(item, "kind")
+        if not kind or kind == "success":
+            continue
+        evidence_refs = _string_sequence(item.get("evidenceRefs"))
+        supported = any(
+            _SPACE_RE.sub(" ", reference).strip().casefold() in selected_source
+            for reference in evidence_refs
+            if reference.strip()
+        )
+        if supported:
+            continue
+        issues.append(
+            {
+                "code": "unsupported_scenario_evidence",
+                "severity": "required",
+                "scenario_index": index,
+                "kind": kind,
+                "fields": [f"testCase.scenarios[{index}].evidenceRefs"],
+                "evidence_refs": evidence_refs[:6],
+                "message": (
+                    "정상 이외 시나리오의 근거가 선택된 소스 근거에서 확인되지 않습니다. "
+                    "의뢰서 표현만으로 선택적 실패 시나리오를 만들지 않아야 합니다"
+                ),
+            }
+        )
+    return issues
+
+
 def build_quality_report(
     structured: Mapping[str, Any],
     changes: Iterable[ChangeItem | Mapping[str, Any]] = (),
     change_notes: Iterable[str] = (),
+    evidence_text: str | None = None,
 ) -> dict[str, Any]:
     """Create a JSON-serializable soft quality and change-coverage report."""
 
@@ -1076,9 +1508,12 @@ def build_quality_report(
         *find_implementation_preconditions(structured),
         *find_non_actionable_test_steps(structured),
         *find_unnatural_test_data(structured),
+        *find_non_executable_test_data(structured),
+        *find_user_facing_implementation_details(structured),
         *find_overloaded_expected_result(structured),
         *find_step_count_mismatch(structured),
         *find_scope_inflation(structured, change_values, note_values),
+        *_unsupported_scenario_evidence(structured, evidence_text),
     ]
     explicit_scenarios = _explicit_scenarios(structured, note_values)
     uncovered_explicit_scenarios = [
@@ -1152,6 +1587,12 @@ def build_quality_report(
     unnatural_data_count = sum(
         issue["code"] == "keyword_like_test_data" for issue in issues
     )
+    non_executable_test_data_count = sum(
+        issue["code"] == "non_executable_test_data" for issue in issues
+    )
+    implementation_detail_count = sum(
+        issue["code"] == "implementation_detail_in_user_test" for issue in issues
+    )
     overloaded_expected_result_count = sum(
         issue["code"] == "overloaded_expected_result" for issue in issues
     )
@@ -1163,6 +1604,9 @@ def build_quality_report(
     )
     procedure_result_overlap_count = sum(
         issue["code"] == "procedure_result_overlap" for issue in issues
+    )
+    unsupported_scenario_evidence_count = sum(
+        issue["code"] == "unsupported_scenario_evidence" for issue in issues
     )
     explicit_scenario_penalty = min(30, len(uncovered_explicit_scenarios) * 10)
     actionable_anchors = [
@@ -1186,10 +1630,13 @@ def build_quality_report(
         - min(30, implementation_count * 10)
         - min(24, non_actionable_count * 8)
         - min(10, unnatural_data_count * 10)
+        - min(24, non_executable_test_data_count * 12)
+        - min(24, implementation_detail_count * 12)
         - min(10, overloaded_expected_result_count * 10)
         - min(10, scope_inflation_count * 10)
         - min(12, step_count_mismatch_count * 12)
         - min(8, procedure_result_overlap_count * 8)
+        - min(30, unsupported_scenario_evidence_count * 15)
         - explicit_scenario_penalty
         - min(28, len(uncovered_categories) * 7)
         - anchor_penalty,
@@ -1214,10 +1661,15 @@ def build_quality_report(
             "implementation_precondition_count": implementation_count,
             "non_actionable_test_step_count": non_actionable_count,
             "keyword_like_test_data_count": unnatural_data_count,
+            "non_executable_test_data_count": non_executable_test_data_count,
+            "implementation_detail_in_user_test_count": implementation_detail_count,
             "overloaded_expected_result_count": overloaded_expected_result_count,
             "overexpanded_simple_change_count": scope_inflation_count,
             "step_count_mismatch_count": step_count_mismatch_count,
             "procedure_result_overlap_count": procedure_result_overlap_count,
+            "unsupported_scenario_evidence_count": (
+                unsupported_scenario_evidence_count
+            ),
             "anchor_count": len(anchors),
             "covered_anchor_count": len(covered_anchors),
             "uncovered_anchor_count": len(uncovered_anchors),

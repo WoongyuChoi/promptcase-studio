@@ -600,16 +600,13 @@ class PipelineTests(unittest.TestCase):
         class MissingRequiredScenarioProvider:
             def generate(self, prompt, log=None, on_chunk=None):
                 payload = json.loads(MockProvider().generate(prompt, log=log, on_chunk=on_chunk))
-                payload["testCase"]["procedure"] = [
-                    "활성 상태 조건을 선택해 사용자 조회를 실행한다"
+                payload["testCase"]["scenarios"] = [
+                    scenario
+                    for scenario in payload["testCase"]["scenarios"]
+                    if scenario["kind"] != "validation"
                 ]
                 payload["testCase"]["preconditions"] = [
                     "활성 상태의 사용자 데이터가 준비되어 있어야 한다"
-                ]
-                payload["testCase"]["testData"] = "활성 상태 사용자 데이터를 사용한다"
-                payload["testCase"]["expectedResult"] = "활성 사용자가 조회 결과에 표시된다"
-                payload["testResult"]["testDetails"] = [
-                    "활성 상태 사용자가 조회 결과에 표시되는지 확인한다"
                 ]
                 payload["testResult"]["resultChecks"] = ["활성 상태 사용자 조회 결과 확인"]
                 return json.dumps(payload, ensure_ascii=False)
@@ -928,7 +925,7 @@ class PipelineTests(unittest.TestCase):
                     "UserService 서비스 객체가 생성되어 있어야 한다"
                 )
                 if self.calls > 1:
-                    payload["testCase"]["procedure"][0] = "저장 버튼 선택"
+                    payload["testCase"]["scenarios"][0]["procedure"] = "저장 버튼 선택"
                 return json.dumps(payload, ensure_ascii=False)
 
         case_directory = TEMP_ROOT / "pipeline-quality-best-effort"
@@ -980,16 +977,13 @@ class PipelineTests(unittest.TestCase):
                 self.calls += 1
                 payload = json.loads(MockProvider().generate(prompt, log=log, on_chunk=on_chunk))
                 if self.calls <= 2:
-                    payload["testCase"]["procedure"] = [
-                        "활성 상태 조건을 선택해 사용자 조회를 실행한다"
+                    payload["testCase"]["scenarios"] = [
+                        scenario
+                        for scenario in payload["testCase"]["scenarios"]
+                        if scenario["kind"] != "validation"
                     ]
                     payload["testCase"]["preconditions"] = [
                         "활성 상태의 사용자 데이터가 준비되어 있어야 한다"
-                    ]
-                    payload["testCase"]["testData"] = "활성 상태 사용자 데이터를 사용한다"
-                    payload["testCase"]["expectedResult"] = "활성 사용자가 조회 결과에 표시된다"
-                    payload["testResult"]["testDetails"] = [
-                        "활성 상태 사용자가 조회 결과에 표시되는지 확인한다"
                     ]
                     payload["testResult"]["resultChecks"] = [
                         "활성 상태 사용자 조회 결과 확인"

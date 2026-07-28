@@ -28,8 +28,8 @@ class PromptBuilderTests(unittest.TestCase):
 
         self.assertEqual(_test_scope_guidance(bundle)[0], 1)
         prompt = build_prompt(bundle, "사용자 저장 로직 변경")
-        self.assertIn("권장 테스트 흐름: 1개", prompt)
-        self.assertIn("계층별 파일 수는 하나의 흐름으로 통합", prompt)
+        self.assertIn("근거 기반 독립 시나리오 후보: 1개", prompt)
+        self.assertIn("작성 목표: 약 3개, 허용 범위 1~5개", prompt)
 
     def test_scope_guidance_caps_large_unannotated_change_at_five(self):
         bundle = ScanBundle(
@@ -65,9 +65,15 @@ class PromptBuilderTests(unittest.TestCase):
         )
         prompt = build_prompt(bundle, "활성 사용자 조회 조건을 변경함")
         self.assertIn(f"프롬프트 버전: {__version__}", prompt)
-        self.assertIn("응답 스키마 버전: 2.3.0", prompt)
-        self.assertIn("품질 정책 버전: 1.4.0", prompt)
+        self.assertIn("응답 스키마 버전: 4.0.0", prompt)
+        self.assertIn("품질 정책 버전: 1.6.0", prompt)
         self.assertIn('"documentTitle"', prompt)
+        self.assertIn('"scenarios"', prompt)
+        self.assertIn('"const": "success"', prompt)
+        self.assertIn("기본 목표는 세 개", prompt)
+        self.assertIn("개수가 0이어도 된다", prompt)
+        self.assertIn("파생 계산값은 expectedResult에만", prompt)
+        self.assertIn("testCase.scenarios.evidenceRefs", prompt)
         self.assertIn("환경설정 시스템명은 `자동 감지`", prompt)
         self.assertIn("근거의 우선순위는 Git diff", prompt)
         self.assertNotIn("{{", prompt)

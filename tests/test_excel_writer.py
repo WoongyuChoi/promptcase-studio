@@ -57,6 +57,56 @@ def document_fixture():
     }
 
 
+def scenario_fixture():
+    return [
+        {
+            "kind": "success",
+            "title": "최신 실적 저장과 달성률 반영",
+            "procedure": "실적 입력 화면에서 근거에 확인된 최신 기간 실적을 입력하고 저장을 실행한다",
+            "testData": "최신 기간의 실적 입력값 3.0과 목표 금액 7.0을 사용한다",
+            "expectedResult": "팝업이 닫히고 최신 실적을 기준으로 대표 실적과 달성률이 다시 표시된다",
+            "notes": "저장 후 최신 실적과 달성률이 재조회된 값으로 표시되면 정상으로 판정한다",
+            "evidenceRefs": ["KpiMapActualModal.tsx"],
+        },
+        {
+            "kind": "validation",
+            "title": "필수 실적값 입력 검증",
+            "procedure": "필수 실적값을 입력하지 않은 상태에서 저장을 실행한다",
+            "testData": "",
+            "expectedResult": "필수값 안내가 표시되고 유효하지 않은 실적 데이터는 저장되지 않는다",
+            "notes": "안내 메시지가 표시되고 기존 실적값이 유지되면 입력 검증이 정상으로 판정된다",
+            "evidenceRefs": ["KpiMapActualModal.tsx"],
+        },
+        {
+            "kind": "permission",
+            "title": "편집 권한 없는 사용자 저장 차단",
+            "procedure": "편집 권한이 없는 사용자 조건으로 실적 저장을 실행한다",
+            "testData": "근거에서 확인된 편집 권한이 없는 사용자 조건을 사용한다",
+            "expectedResult": "권한 안내가 표시되고 실적 변경 내용은 저장 결과에 반영되지 않는다",
+            "notes": "권한 안내 후 화면의 기존 실적값이 유지되면 접근 제어가 정상으로 판정된다",
+            "evidenceRefs": ["MKPIM1110.tsx"],
+        },
+        {
+            "kind": "boundary",
+            "title": "최소 실적값 경계 확인",
+            "procedure": "근거에서 확인된 최소 실적값을 입력하고 저장을 실행한다",
+            "testData": "최소 실적값 0을 사용한다",
+            "expectedResult": "최소 실적값이 저장되고 해당 값을 기준으로 달성률이 계산되어 표시된다",
+            "notes": "최소값 저장과 달성률 표시가 함께 확인되면 경계 처리가 정상으로 판정된다",
+            "evidenceRefs": ["MKPIM1110ServiceImpl.java"],
+        },
+        {
+            "kind": "regression",
+            "title": "기존 실적 조회 회귀 확인",
+            "procedure": "기존에 저장된 기간별 실적을 다시 조회한다",
+            "testData": "기존에 저장된 기간별 실적 데이터를 사용한다",
+            "expectedResult": "기존 기간별 실적과 대표 실적이 누락 없이 조회 결과에 표시된다",
+            "notes": "기존 실적과 대표 실적이 변경 전과 동일하게 조회되면 회귀 문제가 없는 것으로 판정한다",
+            "evidenceRefs": ["MKPIM1110ServiceImpl.java"],
+        },
+    ]
+
+
 def sheet_paths(archive):
     main = f"{{{MAIN_NS}}}"
     wb = ET.fromstring(archive.read("xl/workbook.xml"))
@@ -314,6 +364,95 @@ class ExcelWriterTests(unittest.TestCase):
             for row_number in (3, 6, 7, 9):
                 with self.subTest(row=row_number):
                     self.assertGreater(row_height(test_case, row_number), 19.95)
+
+    def test_writes_plain_numbered_scenario_values_and_one_integrated_note(self):
+        case_directory = TEMP_ROOT / "excel-scenario-layout"
+        case_directory.mkdir(parents=True, exist_ok=True)
+        output = case_directory / "result.xlsx"
+        document = document_fixture()
+        scenarios = scenario_fixture()[:3]
+        document["testCase"]["scenarios"] = scenarios
+        document["testCase"]["notes"] = (
+            "정상 입력과 필수값 및 권한 처리 결과가 모두 예상과 같으면 "
+            "실적 저장 변경이 정상적으로 반영된 것으로 판단한다"
+        )
+
+        generate_workbook(TEMPLATE, output, document)
+        validate_workbook(output)
+
+        fields = {
+            "C5": ("procedure", ""),
+            "C9": ("testData", "별도 테스트 데이터 없음"),
+            "C10": ("expectedResult", ""),
+        }
+        with zipfile.ZipFile(output) as archive:
+            paths = sheet_paths(archive)
+            shared_values = shared_string_values(archive)
+            test_case = ET.fromstring(archive.read(paths["테스트케이스"]))
+
+            for reference, (field, empty_value) in fields.items():
+                with self.subTest(reference=reference):
+                    lines = cell_value(test_case, reference, shared_values).splitlines()
+                    self.assertEqual(len(lines), 3)
+                    for index, (line, scenario) in enumerate(
+                        zip(lines, scenarios),
+                        1,
+                    ):
+                        value = scenario[field] or empty_value
+                        self.assertEqual(line, f"{index}. {value}")
+                    alignment = style_alignment(
+                        archive,
+                        cell_style_id(test_case, reference),
+                    )
+                    self.assertEqual(alignment.attrib.get("wrapText"), "1")
+
+            notes = cell_value(test_case, "C11", shared_values)
+            self.assertEqual(notes, document["testCase"]["notes"])
+            self.assertNotIn("[정상 케이스]", notes)
+            self.assertEqual(len(notes.splitlines()), 1)
+            self.assertGreater(row_height(test_case, 10), 47.0)
+            for row_number in (5, 9, 10, 11):
+                self.assertLessEqual(row_height(test_case, row_number), 409.0)
+
+    def test_writes_five_scenarios_without_falling_back_to_legacy_fields(self):
+        case_directory = TEMP_ROOT / "excel-five-scenarios"
+        case_directory.mkdir(parents=True, exist_ok=True)
+        output = case_directory / "result.xlsx"
+        document = document_fixture()
+        for field in ("procedure", "testData", "expectedResult"):
+            document["testCase"].pop(field)
+        scenarios = scenario_fixture()
+        document["testCase"]["scenarios"] = scenarios
+        document["testCase"]["notes"] = (
+            "다섯 가지 입력 조건의 처리 결과가 모두 예상과 같으면 "
+            "실적 처리 변경이 정상적으로 반영된 것으로 판단한다"
+        )
+
+        generate_workbook(TEMPLATE, output, document)
+        validate_workbook(output)
+
+        with zipfile.ZipFile(output) as archive:
+            paths = sheet_paths(archive)
+            shared_values = shared_string_values(archive)
+            test_case = ET.fromstring(archive.read(paths["테스트케이스"]))
+
+            for reference, field in (
+                ("C5", "procedure"),
+                ("C9", "testData"),
+                ("C10", "expectedResult"),
+            ):
+                with self.subTest(reference=reference):
+                    lines = cell_value(test_case, reference, shared_values).splitlines()
+                    self.assertEqual(len(lines), 5)
+                    self.assertEqual(lines[-1], f"5. {scenarios[-1][field]}")
+                    self.assertFalse(any(line.startswith("6.") for line in lines))
+            self.assertEqual(
+                cell_value(test_case, "C11", shared_values),
+                document["testCase"]["notes"],
+            )
+            for row_number in (5, 9, 10):
+                self.assertGreater(row_height(test_case, row_number), 90.0)
+                self.assertLessEqual(row_height(test_case, row_number), 409.0)
 
     def test_limits_test_items_and_builds_repeated_capture_areas(self):
         case_directory = TEMP_ROOT / "excel-capture-layout"

@@ -757,7 +757,12 @@ def run_pipeline(
                 f"개발 의뢰 {request_line_count}개 문장 중 변경 근거가 확인된 "
                 f"{supported_request_count}개만 필수 품질 시나리오로 사용",
             )
-        draft_report = build_quality_report(structured, bundle.changes, quality_sources)
+        draft_report = build_quality_report(
+            structured,
+            bundle.changes,
+            quality_sources,
+            evidence_text=evidence,
+        )
         selected_report = draft_report
         selected_phase = "draft"
         review_report: dict[str, Any] | None = None
@@ -870,6 +875,7 @@ def run_pipeline(
                     reviewed_structured,
                     bundle.changes,
                     quality_sources,
+                    evidence_text=evidence,
                 )
                 review_reports.append(review_report)
                 (run_directory / f"quality.review{suffix}.json").write_text(

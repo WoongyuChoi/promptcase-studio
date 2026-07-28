@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://promptcase-studio.local/schemas/test_case_response-2.3.0.json",
+  "$id": "https://promptcase-studio.local/schemas/test_case_response-4.0.0.json",
   "title": "Promptcase Studio Unit Test Response",
   "description": "사람이 작성한 형태의 한국어 단위테스트 문안 계약",
   "type": "object",
@@ -18,12 +18,10 @@
       "additionalProperties": false,
       "required": [
         "name",
-        "procedure",
+        "scenarios",
         "targetIds",
         "targetNames",
         "preconditions",
-        "testData",
-        "expectedResult",
         "notes"
       ],
       "properties": {
@@ -33,17 +31,83 @@
           "maxLength": 100,
           "pattern": "^(?!\\s*(?:[-*#]|[0-9]+[.)]))(?=[^\\r\\n]*단위테스트$)[^\\r\\n\\u005c:;：；·ㆍ‧∙⋅○●•◦▪▫◆◇▶▷■□※★☆♥♡♠♣\\\"'“”‘’「」『』＂＇`*#><\\[\\]{}|~]+$"
         },
-        "procedure": {
-          "description": "변경 규모와 사용자 흐름에 맞춘 1개 이상 5개 이하의 실제 실행 단계",
+        "scenarios": {
+          "description": "입력 조건, 실행, 예상결과와 판정 기준이 한 객체에서 대응하는 근거 기반 독립 테스트 시나리오",
           "type": "array",
           "minItems": 1,
           "maxItems": 5,
-          "uniqueItems": true,
+          "contains": {
+            "type": "object",
+            "required": ["kind"],
+            "properties": {
+              "kind": {
+                "const": "success"
+              }
+            }
+          },
+          "minContains": 1,
           "items": {
-            "type": "string",
-            "minLength": 8,
-            "maxLength": 160,
-            "pattern": "^(?!\\s*(?:[-*#]|[0-9]+[.)]))(?=[^\\r\\n]*다$)[^\\r\\n\\u005c:;：；·ㆍ‧∙⋅○●•◦▪▫◆◇▶▷■□※★☆♥♡♠♣\\\"'“”‘’「」『』＂＇`*#><\\[\\]{}|~]+$"
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "title",
+              "procedure",
+              "testData",
+              "expectedResult",
+              "evidenceRefs"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "success",
+                  "validation",
+                  "boundary",
+                  "permission",
+                  "error",
+                  "regression"
+                ]
+              },
+              "title": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 60,
+                "pattern": "^(?!\\s*(?:[-*#]|[0-9]+[.)]))(?!.*[.,!?;:。，！？]$)[^\\r\\n\\u005c:;：；·ㆍ‧∙⋅○●•◦▪▫◆◇▶▷■□※★☆♥♡♠♣\\\"'“”‘’「」『』＂＇`*#><\\[\\]{}|~]+$"
+              },
+              "procedure": {
+                "type": "string",
+                "minLength": 10,
+                "maxLength": 240,
+                "pattern": "^(?!\\s*(?:[-*#]|[0-9]+[.)]))(?=[^\\r\\n]*다$)[^\\r\\n\\u005c:;：；·ㆍ‧∙⋅○●•◦▪▫◆◇▶▷■□※★☆♥♡♠♣\\\"'“”‘’「」『』＂＇`*#><\\[\\]{}|~]+$"
+              },
+              "testData": {
+                "description": "선택된 근거에 실제 등장하는 값 또는 값이 없을 때의 근거 기반 조건이며 별도 데이터가 없으면 빈 문자열",
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 240,
+                "pattern": "^(?:$|(?!\\s*(?:[-*#]|[0-9]+[.)]))[^\\r\\n\\u005c:;：；·ㆍ‧∙⋅○●•◦▪▫◆◇▶▷■□※★☆♥♡♠♣\\\"'“”‘’「」『』＂＇`*#><\\[\\]{}|~]+)$"
+              },
+              "expectedResult": {
+                "type": "string",
+                "minLength": 10,
+                "maxLength": 240,
+                "pattern": "^(?!\\s*(?:[-*#]|[0-9]+[.)]))(?=[^\\r\\n]*다$)[^\\r\\n\\u005c:;：；·ㆍ‧∙⋅○●•◦▪▫◆◇▶▷■□※★☆♥♡♠♣\\\"'“”‘’「」『』＂＇`*#><\\[\\]{}|~]+$"
+              },
+              "evidenceRefs": {
+                "description": "변경 파일 경로, 식별자 또는 데이터 리터럴처럼 선택된 입력 근거에서 그대로 확인되는 참조",
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 6,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100,
+                  "pattern": "^[^\\r\\n\\\"'“”‘’「」『』＂＇`]+$"
+                }
+              }
+            }
           }
         },
         "targetIds": {
@@ -81,31 +145,19 @@
             "pattern": "^(?!\\s*(?:[-*#]|[0-9]+[.)]))(?=[^\\r\\n]*다$)[^\\r\\n\\u005c:;：；·ㆍ‧∙⋅○●•◦▪▫◆◇▶▷■□※★☆♥♡♠♣\\\"'“”‘’「」『』＂＇`*#><\\[\\]{}|~]+$"
           }
         },
-        "testData": {
-          "description": "필요할 때 식별 가능한 값이나 조건을 자연스럽게 연결한 문장 또는 값 목록이며 별도 데이터가 없으면 빈 문자열",
-          "type": "string",
-          "minLength": 0,
-          "maxLength": 180,
-          "pattern": "^(?:$|(?!\\s*(?:[-*#]|[0-9]+[.)]))[^\\r\\n\\u005c:;：；·ㆍ‧∙⋅○●•◦▪▫◆◇▶▷■□※★☆♥♡♠♣\\\"'“”‘’「」『』＂＇`*#><\\[\\]{}|~]+)$"
-        },
-        "expectedResult": {
-          "description": "하나 또는 서로 직접 연결된 두 개의 관찰 결과를 간결하게 합친 한 문장",
-          "type": "string",
-          "minLength": 10,
-          "maxLength": 180,
-          "pattern": "^(?!\\s*(?:[-*#]|[0-9]+[.)]))(?=[^\\r\\n]*다$)[^\\r\\n\\u005c:;：；·ㆍ‧∙⋅○●•◦▪▫◆◇▶▷■□※★☆♥♡♠♣\\\"'“”‘’「」『』＂＇`*#><\\[\\]{}|~]+$"
-        },
         "notes": {
+          "description": "모든 시나리오 결과를 종합해 변경 범위가 정상인지 판단하는 사용자용 한 문장",
           "type": "string",
-          "maxLength": 300,
-          "pattern": "^(?!.$)(?!\\s*(?:[-*#]|[0-9]+[.)]))(?!.*[.,!?;:。，！？]$)[^\\r\\n\\u005c:;：；·ㆍ‧∙⋅○●•◦▪▫◆◇▶▷■□※★☆♥♡♠♣\\\"'“”‘’「」『』＂＇`*#><\\[\\]{}|~]*$"
+          "minLength": 8,
+          "maxLength": 200,
+          "pattern": "^(?!\\s*(?:[-*#]|[0-9]+[.)]))(?=[^\\r\\n]*다$)[^\\r\\n\\u005c:;：；·ㆍ‧∙⋅○●•◦▪▫◆◇▶▷■□※★☆♥♡♠♣\\\"'“”‘’「」『』＂＇`*#><\\[\\]{}|~]+$"
         }
       }
     },
     "testResult": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["processingDetails", "testDetails", "resultChecks"],
+      "required": ["processingDetails", "resultChecks"],
       "properties": {
         "processingDetails": {
           "description": "파일 목록이 아닌 핵심 변경 주제 1개 이상 5개 이하",
@@ -130,19 +182,6 @@
                 "pattern": "^(?!\\s*(?:[-*#]|[0-9]+[.)]))(?!.*[.,!?;:。，！？]$)[^\\r\\n\\u005c:;：；·ㆍ‧∙⋅○●•◦▪▫◆◇▶▷■□※★☆♥♡♠♣\\\"'“”‘’「」『』＂＇`*#><\\[\\]{}|~]+$"
               }
             }
-          }
-        },
-        "testDetails": {
-          "description": "procedure와 같은 수와 순서로 대응하는 1개 이상 5개 이하의 관찰 결과",
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 5,
-          "uniqueItems": true,
-          "items": {
-            "type": "string",
-            "minLength": 8,
-            "maxLength": 160,
-            "pattern": "^(?!\\s*(?:[-*#]|[0-9]+[.)]))(?=[^\\r\\n]*다$)[^\\r\\n\\u005c:;：；·ㆍ‧∙⋅○●•◦▪▫◆◇▶▷■□※★☆♥♡♠♣\\\"'“”‘’「」『』＂＇`*#><\\[\\]{}|~]+$"
           }
         },
         "resultChecks": {

@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import Any, Iterable, TypeVar
 
 from promptcase_studio.json_repair import escape_json_string_control_characters
+from promptcase_studio.scenarios import SCENARIO_KINDS
 
 
 T = TypeVar("T")
@@ -65,6 +66,23 @@ GENERIC_ONLY = {
     "정상 동작한다",
     "정상 처리된다",
 }
+CONCRETE_DATA_LITERAL = re.compile(
+    r"(?<![A-Za-z0-9_.])[-+]?\d+(?:[.,]\d+)*(?:%|퍼센트)?"
+    r"(?![A-Za-z0-9_.])"
+)
+CONCRETE_TECH_LITERAL = re.compile(
+    r"(?<![A-Za-z0-9_])"
+    r"[A-Za-z][A-Za-z0-9_./\\:#=@<>~\[\]-]*"
+    r"(?![A-Za-z0-9_])"
+)
+USER_FACING_IMPLEMENTATION_DETAIL = re.compile(
+    r"(?:\b\d+(?:\.\d+)?\s*(?:px|rem|em|vw|vh)(?![A-Za-z])|"
+    r"\b(?:minmax|gridTemplateColumns|grid-template-columns|"
+    r"font-size|line-height)\b)",
+    re.IGNORECASE,
+)
+
+
 def _top_level_json_objects(text: str) -> list[str]:
     """Return independently parseable top-level JSON objects embedded in text."""
 
@@ -348,6 +366,247 @@ def _raw_string_list(value: Any) -> list[str]:
     return [item.strip() for item in value if isinstance(item, str) and item.strip()]
 
 
+def _evidence_reference_list(
+    value: Any,
+    field: str,
+    evidence_text: str | None,
+) -> list[str]:
+    if not isinstance(value, list):
+        raise ResponseValidationError(f"{field}는 1~6개의 근거 문자열 배열이어야 합니다.")
+    values: list[str] = []
+    errors: list[str] = []
+    normalized_evidence = (
+        re.sub(r"\s+", " ", evidence_text).casefold()
+        if evidence_text is not None
+        else None
+    )
+    for index, item in enumerate(value):
+        try:
+            reference = _string(item, f"{field}[{index}]")
+        except ResponseValidationError as exc:
+            errors.extend(exc.errors)
+            continue
+        reference = re.sub(r"[\r\n\t]+", " ", reference)
+        reference = re.sub(r"\s+", " ", reference).strip()
+        if not 1 <= len(reference) <= 100:
+            errors.append(f"{field}[{index}] 길이는 1~100자여야 합니다.")
+            continue
+        if normalized_evidence is not None:
+            normalized_reference = re.sub(r"\s+", " ", reference).casefold()
+            if normalized_reference not in normalized_evidence:
+                errors.append(
+                    f"{field}[{index}] 값이 선택된 입력 근거에서 확인되지 않습니다: "
+                    f"{reference}"
+                )
+                continue
+        values.append(reference)
+    _unique(values, field)
+    if not 1 <= len(values) <= 6:
+        errors.append(f"{field} 항목 수는 1~6개여야 합니다.")
+    if errors:
+        raise ResponseValidationError(errors)
+    return values
+
+
+def _validate_grounded_test_data(
+    value: str,
+    field: str,
+    evidence_text: str | None,
+) -> None:
+    if not value or evidence_text is None:
+        return
+    normalized_evidence = evidence_text.casefold()
+    concrete_values = [
+        *(match.group(0) for match in CONCRETE_DATA_LITERAL.finditer(value)),
+        *(match.group(0) for match in CONCRETE_TECH_LITERAL.finditer(value)),
+    ]
+    missing = [
+        item
+        for item in concrete_values
+        if item.casefold() not in normalized_evidence
+    ]
+    if missing:
+        raise ResponseValidationError(
+            f"{field}의 구체적인 값이 선택된 입력 근거에서 확인되지 않습니다: "
+            + ", ".join(dict.fromkeys(missing))
+        )
+
+
+def _validate_user_facing_test_text(value: str, field: str) -> None:
+    if not value:
+        return
+    match = USER_FACING_IMPLEMENTATION_DETAIL.search(value)
+    if match is None:
+        return
+    raise ResponseValidationError(
+        f"{field}에는 {match.group(0)} 같은 CSS 수치나 구현 속성을 쓰지 말고 "
+        "사용자가 화면에서 확인할 수 있는 동작과 결과를 작성해야 합니다."
+    )
+
+
+def _scenario_list(
+    value: Any,
+    evidence_text: str | None,
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ResponseValidationError("testCase.scenarios는 객체 배열이어야 합니다.")
+    errors: list[str] = []
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(value):
+        field = f"testCase.scenarios[{index}]"
+        if not isinstance(item, dict):
+            errors.append(f"{field}는 객체여야 합니다.")
+            continue
+        try:
+            _ensure_keys(
+                item,
+                field,
+                {
+                    "kind",
+                    "title",
+                    "procedure",
+                    "testData",
+                    "expectedResult",
+                    "evidenceRefs",
+                },
+                {"notes"},
+            )
+        except ResponseValidationError as exc:
+            errors.extend(exc.errors)
+        kind = ""
+        try:
+            kind = _string(item.get("kind"), f"{field}.kind")
+            if kind not in SCENARIO_KINDS:
+                raise ResponseValidationError(
+                    f"{field}.kind는 success, validation, boundary, permission, "
+                    "error, regression 중 하나여야 합니다."
+                )
+        except ResponseValidationError as exc:
+            errors.extend(exc.errors)
+        title = ""
+        procedure = ""
+        test_data = ""
+        expected_result = ""
+        notes = ""
+        evidence_refs: list[str] = []
+        for key, minimum, maximum, endings, allow_empty in (
+            ("title", 3, 60, (), False),
+            ("procedure", 10, 240, ("다",), False),
+            ("testData", 0, 240, (), True),
+            ("expectedResult", 10, 240, ("다",), False),
+        ):
+            try:
+                parsed = _human_text(
+                    item.get(key),
+                    f"{field}.{key}",
+                    minimum=minimum,
+                    maximum=maximum,
+                    endings=endings,
+                    allow_empty=allow_empty,
+                )
+            except ResponseValidationError as exc:
+                errors.extend(exc.errors)
+                parsed = _raw_string(item.get(key))
+            if key == "title":
+                title = parsed
+            elif key == "procedure":
+                procedure = parsed
+            elif key == "testData":
+                test_data = parsed
+            elif key == "expectedResult":
+                expected_result = parsed
+        if "notes" in item:
+            try:
+                notes = _human_text(
+                    item.get("notes"),
+                    f"{field}.notes",
+                    minimum=8,
+                    maximum=200,
+                    endings=("다",),
+                )
+            except ResponseValidationError as exc:
+                errors.extend(exc.errors)
+                notes = _raw_string(item.get("notes"))
+        try:
+            evidence_refs = _evidence_reference_list(
+                item.get("evidenceRefs"),
+                f"{field}.evidenceRefs",
+                evidence_text,
+            )
+        except ResponseValidationError as exc:
+            errors.extend(exc.errors)
+            evidence_refs = _raw_string_list(item.get("evidenceRefs"))
+        try:
+            _validate_grounded_test_data(
+                test_data,
+                f"{field}.testData",
+                evidence_text,
+            )
+        except ResponseValidationError as exc:
+            errors.extend(exc.errors)
+        for key, text in (
+            ("procedure", procedure),
+            ("testData", test_data),
+            ("expectedResult", expected_result),
+        ):
+            try:
+                _validate_user_facing_test_text(text, f"{field}.{key}")
+            except ResponseValidationError as exc:
+                errors.extend(exc.errors)
+        if all((kind, title, procedure, expected_result)) and evidence_refs:
+            scenario = {
+                "kind": kind,
+                "title": title,
+                "procedure": procedure,
+                "testData": test_data,
+                "expectedResult": expected_result,
+                "evidenceRefs": evidence_refs,
+            }
+            if notes:
+                scenario["notes"] = notes
+            normalized.append(
+                scenario
+            )
+    if not 1 <= len(normalized) <= 5:
+        errors.append("testCase.scenarios 항목 수는 1~5개여야 합니다.")
+    if normalized and not any(item["kind"] == "success" for item in normalized):
+        errors.append("testCase.scenarios에는 success 정상 케이스가 한 개 이상 필요합니다.")
+    scenario_keys: set[tuple[str, str]] = set()
+    for item in normalized:
+        key = (
+            re.sub(r"\s+", " ", item["title"]).casefold(),
+            re.sub(r"\s+", " ", item["procedure"]).casefold(),
+        )
+        if key in scenario_keys:
+            errors.append("testCase.scenarios에 중복된 제목과 실행 절차가 있습니다.")
+            break
+        scenario_keys.add(key)
+    if errors:
+        raise ResponseValidationError(errors)
+    return normalized
+
+
+def _raw_scenarios(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            {
+                "kind": _raw_string(item.get("kind")),
+                "title": _raw_string(item.get("title")),
+                "procedure": _raw_string(item.get("procedure")),
+                "testData": _raw_string(item.get("testData")),
+                "expectedResult": _raw_string(item.get("expectedResult")),
+                "notes": _raw_string(item.get("notes")),
+                "evidenceRefs": _raw_string_list(item.get("evidenceRefs")),
+            }
+        )
+    return rows
+
+
 def _processing_details(value: Any) -> list[dict[str, str]]:
     if not isinstance(value, list):
         raise ResponseValidationError("testResult.processingDetails는 객체 배열이어야 합니다.")
@@ -452,34 +711,71 @@ def parse_structured_response(raw: str, evidence_text: str | None = None) -> dic
     # sentinels and are never inspected internally.
     test_case: dict[str, Any] = raw_test_case if test_case_is_object else {}
     test_result: dict[str, Any] = raw_test_result if test_result_is_object else {}
+    scenario_mode = test_case_is_object and "scenarios" in test_case
 
     if test_case_is_object:
-        collector.capture(
-            lambda: _ensure_keys(
-                test_case,
-                "testCase",
-                {
-                    "name",
-                    "procedure",
-                    "targetIds",
-                    "targetNames",
-                    "preconditions",
-                    "testData",
-                    "expectedResult",
-                    "notes",
-                },
-            ),
-            None,
-        )
+        if scenario_mode:
+            collector.capture(
+                lambda: _ensure_keys(
+                    test_case,
+                    "testCase",
+                    {
+                        "name",
+                        "scenarios",
+                        "targetIds",
+                        "targetNames",
+                        "preconditions",
+                    },
+                    {
+                        # Accept transitional responses that include the old flat
+                        # fields too. The scenario objects remain the source of
+                        # truth and the compatibility fields are derived below.
+                        "procedure",
+                        "testData",
+                        "expectedResult",
+                        "notes",
+                    },
+                ),
+                None,
+            )
+        else:
+            collector.capture(
+                lambda: _ensure_keys(
+                    test_case,
+                    "testCase",
+                    {
+                        "name",
+                        "procedure",
+                        "targetIds",
+                        "targetNames",
+                        "preconditions",
+                        "testData",
+                        "expectedResult",
+                        "notes",
+                    },
+                ),
+                None,
+            )
     if test_result_is_object:
-        collector.capture(
-            lambda: _ensure_keys(
-                test_result,
-                "testResult",
-                {"processingDetails", "testDetails", "resultChecks"},
-            ),
-            None,
-        )
+        if scenario_mode:
+            collector.capture(
+                lambda: _ensure_keys(
+                    test_result,
+                    "testResult",
+                    {"processingDetails", "resultChecks"},
+                    {"testDetails"},
+                ),
+                None,
+            )
+        else:
+            collector.capture(
+                lambda: _ensure_keys(
+                    test_result,
+                    "testResult",
+                    {"processingDetails", "testDetails", "resultChecks"},
+                ),
+                None,
+            )
 
     raw_document_title = _raw_string(data.get("documentTitle", ""))
     invalid_document_title = bool(
@@ -517,8 +813,17 @@ def parse_structured_response(raw: str, evidence_text: str | None = None) -> dic
             _raw_string(test_case.get("name")),
         )
 
+    scenarios: list[dict[str, Any]] = []
+    if scenario_mode:
+        scenarios = collector.capture(
+            lambda: _scenario_list(test_case.get("scenarios"), evidence_text),
+            _raw_scenarios(test_case.get("scenarios")),
+        )
+
     procedure: list[str] = []
-    if "procedure" in test_case:
+    if scenarios:
+        procedure = [item["procedure"] for item in scenarios]
+    elif not scenario_mode and "procedure" in test_case:
         procedure = collector.capture(
             lambda: _human_list(
                 test_case.get("procedure"),
@@ -571,7 +876,9 @@ def parse_structured_response(raw: str, evidence_text: str | None = None) -> dic
         )
 
     test_details: list[str] = []
-    if "testDetails" in test_result:
+    if scenarios:
+        test_details = [item["expectedResult"] for item in scenarios]
+    elif not scenario_mode and "testDetails" in test_result:
         test_details = collector.capture(
             lambda: _human_list(
                 test_result.get("testDetails"),
@@ -585,7 +892,30 @@ def parse_structured_response(raw: str, evidence_text: str | None = None) -> dic
             _raw_string_list(test_result.get("testDetails")),
         )
     notes = ""
-    if "notes" in test_case:
+    if scenarios:
+        if "notes" in test_case:
+            notes = collector.capture(
+                lambda: _human_text(
+                    test_case.get("notes"),
+                    "testCase.notes",
+                    minimum=8,
+                    maximum=200,
+                    endings=("다",),
+                ),
+                _raw_string(test_case.get("notes")),
+            )
+        else:
+            legacy_notes = [
+                item["notes"]
+                for item in scenarios
+                if isinstance(item.get("notes"), str) and item["notes"].strip()
+            ]
+            notes = legacy_notes[0] if legacy_notes else ""
+            if not notes:
+                collector.add(
+                    "testCase.notes에는 모든 시나리오 결과를 종합한 비고 한 문장이 필요합니다."
+                )
+    elif not scenario_mode and "notes" in test_case:
         notes = collector.capture(
             lambda: _human_text(
                 test_case.get("notes"),
@@ -597,7 +927,11 @@ def parse_structured_response(raw: str, evidence_text: str | None = None) -> dic
             _raw_string(test_case.get("notes")),
         )
     test_data = ""
-    if "testData" in test_case:
+    if scenarios:
+        test_data = "\n".join(
+            item["testData"] for item in scenarios if item["testData"]
+        )
+    elif not scenario_mode and "testData" in test_case:
         test_data = collector.capture(
             lambda: _human_text(
                 test_case.get("testData"),
@@ -609,7 +943,9 @@ def parse_structured_response(raw: str, evidence_text: str | None = None) -> dic
             _raw_string(test_case.get("testData")),
         )
     expected_result = ""
-    if "expectedResult" in test_case:
+    if scenarios:
+        expected_result = "\n".join(item["expectedResult"] for item in scenarios)
+    elif not scenario_mode and "expectedResult" in test_case:
         expected_result = collector.capture(
             lambda: _human_text(
                 test_case.get("expectedResult"),
@@ -635,18 +971,22 @@ def parse_structured_response(raw: str, evidence_text: str | None = None) -> dic
         )
     collector.raise_if_any()
 
+    normalized_test_case = {
+        "name": name,
+        "procedure": procedure,
+        "targetIds": target_ids,
+        "targetNames": target_names,
+        "preconditions": preconditions,
+        "testData": test_data,
+        "expectedResult": expected_result,
+        "notes": notes,
+    }
+    if scenario_mode:
+        normalized_test_case["scenarios"] = scenarios
+
     return {
         "documentTitle": document_title,
-        "testCase": {
-            "name": name,
-            "procedure": procedure,
-            "targetIds": target_ids,
-            "targetNames": target_names,
-            "preconditions": preconditions,
-            "testData": test_data,
-            "expectedResult": expected_result,
-            "notes": notes,
-        },
+        "testCase": normalized_test_case,
         "testResult": {
             "processingDetails": normalized_processing,
             "testDetails": test_details,

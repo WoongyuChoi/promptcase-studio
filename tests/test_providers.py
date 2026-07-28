@@ -19,6 +19,7 @@ from promptcase_studio.gemini_models import (
     gemini_model_sequence,
     normalize_gemini_model_id,
 )
+from promptcase_studio.providers.mock import MockProvider
 from promptcase_studio.providers.qwen import (
     QwenProvider,
     load_qwen_profile,
@@ -111,6 +112,26 @@ class StaticResponse:
 
 
 class ProviderParsingTests(unittest.TestCase):
+    def test_mock_provider_uses_independent_grounded_scenarios(self):
+        payload = json.loads(MockProvider().generate("fixture prompt"))
+        test_case = payload["testCase"]
+        scenarios = test_case["scenarios"]
+
+        self.assertEqual(
+            [scenario["kind"] for scenario in scenarios],
+            ["success", "validation", "regression"],
+        )
+        self.assertNotIn("procedure", test_case)
+        self.assertNotIn("testData", test_case)
+        self.assertNotIn("expectedResult", test_case)
+        self.assertTrue(test_case["notes"].endswith("다"))
+        for scenario in scenarios:
+            with self.subTest(title=scenario["title"]):
+                self.assertTrue(scenario["evidenceRefs"])
+                self.assertTrue(scenario["procedure"].endswith("다"))
+                self.assertTrue(scenario["expectedResult"].endswith("다"))
+                self.assertNotIn("notes", scenario)
+
     def test_extracts_gemini_text(self):
         text = GeminiProvider.extract_text(
             {"candidates": [{"content": {"parts": [{"text": "{\"ok\":true}"}]}}]}
