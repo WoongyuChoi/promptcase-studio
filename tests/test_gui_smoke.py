@@ -142,10 +142,23 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertFalse(dialog.windowFlags() & Qt.WindowContextHelpButtonHint)
         self.assertFalse(dialog.subject_edit.isReadOnly())
         self.assertFalse(dialog.body_edit.isReadOnly())
+        self.assertEqual(dialog.download_button.text(), "릴리즈 노트 다운로드")
+        self.assertFalse(dialog.download_button.icon().isNull())
         self.assertFalse(dialog.copy_button.icon().isNull())
         self.assertEqual(
             dialog.close_button.font().pixelSize(),
             dialog.copy_button.font().pixelSize(),
+        )
+        self.assertEqual(
+            dialog.download_button.font().pixelSize(),
+            dialog.copy_button.font().pixelSize(),
+        )
+        dialog.show()
+        self.app.processEvents()
+        self.assertLess(dialog.download_button.x(), dialog.copy_button.x())
+        self.assertGreaterEqual(
+            dialog.download_button.width(),
+            dialog.download_button.sizeHint().width(),
         )
 
         dialog.subject_edit.setText("사용자가 수정한 제목")
@@ -163,6 +176,92 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(reopened.subject_edit.text(), subject)
         self.assertEqual(reopened.body_edit.toPlainText(), body)
         reopened.close()
+
+    def test_release_note_download_uses_test_case_name_and_current_editor_text(self):
+        project_root = Path(__file__).resolve().parent.parent
+        case_root = project_root / "tmp" / "tests" / "release-note-download"
+        case_root.mkdir(parents=True, exist_ok=True)
+        destination = case_root / "사업계획관리시스템_릴리즈노트_20260728_123849.txt"
+        if destination.exists():
+            destination.unlink()
+        captured_default = {}
+
+        def choose_destination(_parent, _title, default_path, _filter):
+            captured_default["path"] = Path(default_path)
+            return str(destination), ""
+
+        dialog = ReleaseNoteDialog(
+            "[공유] 저장 조건 변경",
+            "안녕하세요.\n\n저장 조건을 변경했습니다.\n\n감사합니다.",
+            suggested_filename=(
+                "사업계획관리시스템_단위테스트_20260728_123849.xlsx"
+            ),
+            default_directory=case_root,
+        )
+        dialog.subject_edit.setText("[공유] 사용자가 다듬은 제목")
+        dialog.body_edit.setPlainText("안녕하세요.\n\n사용자가 다듬은 본문입니다.\n\n감사합니다.")
+        with (
+            patch.object(QFileDialog, "getSaveFileName", side_effect=choose_destination),
+            patch.object(QMessageBox, "information"),
+            patch.object(QMessageBox, "critical") as critical,
+            patch(
+                "promptcase_studio.ui.release_note_dialog.QDesktopServices.openUrl",
+                return_value=True,
+            ) as open_directory,
+        ):
+            dialog.download_button.click()
+
+        self.assertEqual(
+            captured_default["path"].name,
+            "사업계획관리시스템_릴리즈노트_20260728_123849.txt",
+        )
+        self.assertEqual(
+            destination.read_text(encoding="utf-8-sig"),
+            "제목: [공유] 사용자가 다듬은 제목\n\n"
+            "안녕하세요.\n\n사용자가 다듬은 본문입니다.\n\n감사합니다.",
+        )
+        self.assertEqual(dialog.copy_status.text(), "릴리즈 노트를 저장했습니다.")
+        critical.assert_not_called()
+        open_directory.assert_called_once()
+        self.assertEqual(
+            Path(open_directory.call_args.args[0].toLocalFile()),
+            destination.parent.resolve(),
+        )
+        dialog.close()
+
+    def test_main_window_passes_test_case_name_to_release_note_download(self):
+        project_root = Path(__file__).resolve().parent.parent
+        source = project_root / "templates" / "unittest_template.xlsx"
+        case_root = project_root / "tmp" / "tests" / "release-note-main-window"
+        window = MainWindow()
+        window.settings["outputDirectory"] = str(case_root)
+        window.last_result = PipelineResult(
+            run_id="release-note",
+            run_directory=source.parent,
+            document_path=source,
+            suggested_filename=(
+                "사업계획관리시스템_단위테스트_20260728_123849.xlsx"
+            ),
+            response_path=source,
+            scan_bundle=ScanBundle(),
+            release_note_subject="[공유] 저장 조건 변경",
+            release_note_body="안녕하세요.\n\n저장 조건을 변경했습니다.\n\n감사합니다.",
+        )
+
+        with patch(
+            "promptcase_studio.ui.main_window.ReleaseNoteDialog"
+        ) as dialog_type:
+            window._open_release_note()
+
+        dialog_type.assert_called_once_with(
+            window.last_result.release_note_subject,
+            window.last_result.release_note_body,
+            window,
+            suggested_filename=window.last_result.suggested_filename,
+            default_directory=case_root,
+        )
+        dialog_type.return_value.exec_.assert_called_once_with()
+        window.close()
 
     def test_project_path_cells_accept_direct_input_and_skip_invalid_paths(self):
         window = MainWindow()
@@ -304,12 +403,21 @@ class GuiSmokeTests(unittest.TestCase):
             patch.object(QFileDialog, "getSaveFileName", side_effect=choose_destination),
             patch.object(QMessageBox, "information"),
             patch.object(QMessageBox, "critical") as critical,
+            patch(
+                "promptcase_studio.ui.main_window.QDesktopServices.openUrl",
+                return_value=True,
+            ) as open_directory,
         ):
             window._download_template()
 
         self.assertEqual(captured_default["path"].name, "단위테스트 템플릿.xlsx")
         self.assertEqual(destination.read_bytes(), source.read_bytes())
         critical.assert_not_called()
+        open_directory.assert_called_once()
+        self.assertEqual(
+            Path(open_directory.call_args.args[0].toLocalFile()),
+            destination.parent.resolve(),
+        )
         window.close()
 
     def test_failed_workbook_validation_does_not_replace_existing_download(self):

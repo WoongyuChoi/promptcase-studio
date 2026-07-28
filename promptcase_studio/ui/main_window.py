@@ -1093,6 +1093,8 @@ class MainWindow(QMainWindow):
             self.last_result.release_note_subject,
             self.last_result.release_note_body,
             self,
+            suggested_filename=self.last_result.suggested_filename,
+            default_directory=self._default_save_directory(),
         )
         dialog.exec_()
 
@@ -1169,6 +1171,7 @@ class MainWindow(QMainWindow):
             "저장 완료",
             f"템플릿을 저장했습니다.\n{destination}",
         )
+        self._open_saved_directory(destination.parent)
 
     def _open_settings(self) -> None:
         dialog = SettingsDialog(self.settings, self)

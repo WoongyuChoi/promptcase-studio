@@ -473,6 +473,21 @@ def render_release_note(release_note: dict[str, str]) -> str:
     return f"제목: {release_note['subject'].strip()}\n\n{release_note['body'].strip()}"
 
 
+def release_note_download_name(test_case_filename: str) -> str:
+    """Build a TXT name that keeps the test-case system name and timestamp."""
+
+    stem = Path(str(test_case_filename or "").strip()).stem
+    if not stem:
+        return "릴리즈노트.txt"
+    if "_단위테스트_" in stem:
+        stem = stem.replace("_단위테스트_", "_릴리즈노트_", 1)
+    elif stem.endswith("_단위테스트"):
+        stem = f"{stem.removesuffix('_단위테스트')}_릴리즈노트"
+    else:
+        stem = f"{stem}_릴리즈노트"
+    return f"{stem}.txt"
+
+
 def fallback_release_note(
     structured: dict[str, Any],
     title: str,
@@ -565,5 +580,6 @@ __all__ = [
     "build_release_note_prompt",
     "fallback_release_note",
     "parse_release_note_response",
+    "release_note_download_name",
     "render_release_note",
 ]

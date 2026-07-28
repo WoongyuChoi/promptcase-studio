@@ -8,11 +8,24 @@ from promptcase_studio.release_note import (
     build_release_note_prompt,
     fallback_release_note,
     parse_release_note_response,
+    release_note_download_name,
     render_release_note,
 )
 
 
 class ReleaseNoteTests(unittest.TestCase):
+    def test_download_name_keeps_system_name_and_run_timestamp(self):
+        self.assertEqual(
+            release_note_download_name(
+                "사업계획관리시스템_단위테스트_20260728_123849.xlsx"
+            ),
+            "사업계획관리시스템_릴리즈노트_20260728_123849.txt",
+        )
+        self.assertEqual(
+            release_note_download_name("사용자관리.xlsx"),
+            "사용자관리_릴리즈노트.txt",
+        )
+
     def setUp(self):
         self.structured = {
             "testCase": {

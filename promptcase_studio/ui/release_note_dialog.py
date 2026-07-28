@@ -1,26 +1,42 @@
 from __future__ import annotations
 
-from PyQt5.QtCore import QSize, Qt
+from pathlib import Path
+
+from PyQt5.QtCore import QSize, Qt, QUrl
+from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
     QApplication,
     QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
+from promptcase_studio.release_note import release_note_download_name
 from promptcase_studio.ui.icons import interface_icon
 
 
 class ReleaseNoteDialog(QDialog):
     """A disposable editor backed by the generated release-note original."""
 
-    def __init__(self, subject: str, body: str, parent=None):
+    def __init__(
+        self,
+        subject: str,
+        body: str,
+        parent=None,
+        *,
+        suggested_filename: str = "",
+        default_directory: Path | None = None,
+    ):
         super().__init__(parent)
+        self.suggested_filename = release_note_download_name(suggested_filename)
+        self.default_directory = Path(default_directory or Path.home())
         self.setObjectName("releaseNoteDialog")
         self.setWindowTitle("릴리즈 노트 뷰")
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
@@ -41,13 +57,21 @@ class ReleaseNoteDialog(QDialog):
         title = QLabel("릴리즈 노트 메일")
         title.setObjectName("dialogTitle")
         subtitle = QLabel(
-            "팀에 바로 공유할 수 있는 메일 문안입니다. 이 창에서 한 수정은 저장되지 않습니다."
+            "팀 공유용 메일 문안입니다. 이 창의 수정 내용은 저장되지 않습니다."
         )
         subtitle.setObjectName("dialogSubtitle")
         title_box.addWidget(title)
         title_box.addWidget(subtitle)
         header.addLayout(title_box)
         header.addStretch(1)
+
+        self.download_button = QPushButton("릴리즈 노트 다운로드")
+        self.download_button.setObjectName("releaseNoteDownloadButton")
+        self.download_button.setIcon(interface_icon("download", "#33466A"))
+        self.download_button.setIconSize(QSize(15, 15))
+        self.download_button.setFixedSize(190, 32)
+        self.download_button.clicked.connect(self._download_text)
+        header.addWidget(self.download_button, 0, Qt.AlignTop)
 
         self.copy_button = QPushButton("복사")
         self.copy_button.setObjectName("releaseNoteCopyButton")
@@ -105,6 +129,38 @@ class ReleaseNoteDialog(QDialog):
     def _copy_to_clipboard(self) -> None:
         QApplication.clipboard().setText(self.mail_text())
         self.copy_status.setText("메일 문안을 복사했습니다.")
+
+    def _download_text(self) -> None:
+        default_path = self.default_directory / self.suggested_filename
+        selected, _ = QFileDialog.getSaveFileName(
+            self,
+            "릴리즈 노트 저장",
+            str(default_path),
+            "텍스트 문서 (*.txt)",
+        )
+        if not selected:
+            return
+        destination = Path(selected)
+        if destination.suffix.casefold() != ".txt":
+            destination = destination.with_suffix(".txt")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = destination.with_name(f".{destination.name}.tmp")
+        try:
+            with temp_path.open("w", encoding="utf-8-sig", newline="\r\n") as stream:
+                stream.write(self.mail_text())
+            temp_path.replace(destination)
+        except OSError as exc:
+            if temp_path.exists():
+                temp_path.unlink()
+            QMessageBox.critical(self, "저장 실패", f"릴리즈 노트를 저장하지 못했습니다.\n{exc}")
+            return
+        self.copy_status.setText("릴리즈 노트를 저장했습니다.")
+        QMessageBox.information(
+            self,
+            "저장 완료",
+            f"릴리즈 노트를 저장했습니다.\n{destination}",
+        )
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(destination.parent.resolve())))
 
 
 __all__ = ["ReleaseNoteDialog"]

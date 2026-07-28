@@ -223,6 +223,17 @@ QPushButton#releaseNoteCopyButton:hover {
     background: #2D469B;
     border-color: #2D469B;
 }
+QPushButton#releaseNoteDownloadButton {
+    background: #FFFFFF;
+    border-color: #BFCBDD;
+    color: #33466A;
+    font-size: 13px;
+    font-weight: 700;
+}
+QPushButton#releaseNoteDownloadButton:hover {
+    background: #F3F6FC;
+    border-color: #92A4C1;
+}
 QPushButton#releaseNoteCloseButton {
     background: #FFFFFF;
     border-color: #CFD9E6;
