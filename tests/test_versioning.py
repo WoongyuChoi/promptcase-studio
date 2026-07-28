@@ -11,6 +11,13 @@ class VersioningTests(unittest.TestCase):
     def test_product_version_is_semver(self):
         self.assertRegex(__version__, r"^\d+\.\d+\.\d+$")
 
+    def test_bot_icon_is_the_single_favicon_source(self):
+        favicon = PROJECT_ROOT / "favicon.ico"
+
+        self.assertTrue(favicon.is_file())
+        self.assertFalse((PROJECT_ROOT / "icons8-bot-70.ico").exists())
+        self.assertTrue(favicon.read_bytes().startswith(b"\x00\x00\x01\x00"))
+
     def test_bundled_document_system_name_is_domain_neutral(self):
         settings = json.loads(
             (PROJECT_ROOT / "config" / "app.settings.json").read_text(

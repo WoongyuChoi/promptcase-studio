@@ -6,6 +6,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtCore import QDate, QSize, Qt
+from PyQt5.QtGui import QTextCursor
 from PyQt5.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -22,7 +23,7 @@ from PyQt5.QtWidgets import (
 from promptcase_studio import __version__
 from promptcase_studio.models import ChangeItem, PipelineResult, ScanBundle
 from promptcase_studio.scanner import collect_changes
-from promptcase_studio.ui.main_window import MainWindow, _wrap_alert_text
+from promptcase_studio.ui.main_window import MainWindow, TerminalPanel, _wrap_alert_text
 from promptcase_studio.ui.release_note_dialog import ReleaseNoteDialog
 from promptcase_studio.ui.settings_dialog import SettingsDialog
 from promptcase_studio.ui.styles import APP_STYLESHEET
@@ -54,16 +55,44 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(window.online_radio.text(), "온라인(Gemini)")
         self.assertEqual(window.secure_radio.text(), "폐쇄망(Qwen)")
         self.assertEqual(window.findChild(QLabel, "brandTitle").text(), "PROMPTCASE STUDIO")
+        brand_mark = window.findChild(QLabel, "brandMark")
+        self.assertEqual(brand_mark.size(), QSize(36, 36))
+        self.assertIsNotNone(brand_mark.pixmap())
+        self.assertFalse(brand_mark.pixmap().isNull())
+        self.assertEqual(brand_mark.pixmap().size(), QSize(26, 26))
+        self.assertRegex(
+            APP_STYLESHEET,
+            r"(?s)QLabel#brandMark\s*\{.*?border-radius:\s*18px;",
+        )
         self.assertIsNone(window.findChild(QLabel, "terminalSub"))
+        self.assertEqual(
+            window.findChild(QLabel, "terminalTitle").text(),
+            "CONSOLE",
+        )
         self.assertEqual(window.terminal.status.text(), "READY")
         self.assertEqual(window.terminal.status.property("state"), "ready")
         startup_text = window.terminal.output.toPlainText()
         self.assertIn("PROMPTCASE STUDIO", startup_text)
         self.assertIn(f"(v{__version__})", startup_text)
-        self.assertIn("[INFO] 실행 콘솔 준비 완료", startup_text)
-        self.assertEqual(len(window.terminal._LOGO_COLUMNS), 10)
-        self.assertEqual(len(window.terminal._LOGO_COLORS), 10)
-        self.assertGreater(window.terminal.output.toHtml().count("\xa0"), 50)
+        self.assertIn("[INFO] 콘솔이 준비되었습니다.", startup_text)
+        self.assertEqual(len(window.terminal._LOGO_COLUMNS), 16)
+        self.assertEqual(len(window.terminal._LOGO_COLORS), 16)
+        self.assertIn("█", startup_text)
+        self.assertIn(TerminalPanel._LOGO_DEPTH_CHARACTER, startup_text)
+        self.assertNotIn("□", startup_text)
+        self.assertNotIn("\ufffc", startup_text)
+        self.assertNotIn("<img", window.terminal.output.toHtml().lower())
+        self.assertGreater(window.terminal.output.toHtml().count("\xa0"), 100)
+        bottom_word_first_line = startup_text.splitlines()[6]
+        self.assertLessEqual(
+            len(bottom_word_first_line) - len(bottom_word_first_line.lstrip()),
+            1,
+        )
+        first_block = startup_text.index("█")
+        cursor = QTextCursor(window.terminal.output.document())
+        cursor.setPosition(first_block)
+        cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor)
+        self.assertNotEqual(cursor.charFormat().textOutline().style(), Qt.NoPen)
         self.assertNotIn("SECURE NETWORK", startup_text)
         self.assertNotIn("qwen3.6-agent", startup_text)
         self.assertNotIn("SCAN > CONTEXT > AI > VALIDATE > EXCEL", startup_text)

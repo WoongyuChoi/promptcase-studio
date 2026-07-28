@@ -13,10 +13,10 @@ QFrame#topBar {
     border-bottom: 1px solid #DDE5EF;
 }
 QLabel#brandMark {
-    background: #EAF0F8;
-    color: #23367F;
-    border: 1px solid #D7E0EC;
-    border-radius: 7px;
+    background: #F3F0FF;
+    color: #6750A4;
+    border: 1px solid #D9D0F5;
+    border-radius: 18px;
     font-size: 16px;
     font-weight: 800;
 }

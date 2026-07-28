@@ -9,7 +9,15 @@ from pathlib import Path
 from typing import Any
 
 from PyQt5.QtCore import QDate, QDir, QSize, QTimer, Qt, QUrl, pyqtSignal
-from PyQt5.QtGui import QCloseEvent, QDesktopServices, QFont, QIcon, QTextCursor
+from PyQt5.QtGui import (
+    QColor,
+    QCloseEvent,
+    QDesktopServices,
+    QFont,
+    QIcon,
+    QPen,
+    QTextCursor,
+)
 from PyQt5.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -127,6 +135,8 @@ def _validated_atomic_copy(source: Path, destination: Path) -> None:
 class TerminalPanel(QFrame):
     MAX_LOG_CHARS = 1_600
     MAX_STREAM_CHARS = 12_000
+    _LOGO_WORD_RANGES = ((0, 10), (10, 16))
+    _LOGO_DEPTH_CHARACTER = "░"
     _LOGO_COLUMNS = (
         (
             "████ ",
@@ -198,18 +208,66 @@ class TerminalPanel(QFrame):
             "█    ",
             "█████",
         ),
+        (
+            " ████",
+            "█    ",
+            " ███ ",
+            "    █",
+            "████ ",
+        ),
+        (
+            "█████",
+            "  █  ",
+            "  █  ",
+            "  █  ",
+            "  █  ",
+        ),
+        (
+            "█   █",
+            "█   █",
+            "█   █",
+            "█   █",
+            " ███ ",
+        ),
+        (
+            "████ ",
+            "█   █",
+            "█   █",
+            "█   █",
+            "████ ",
+        ),
+        (
+            "█████",
+            "  █  ",
+            "  █  ",
+            "  █  ",
+            "█████",
+        ),
+        (
+            " ███ ",
+            "█   █",
+            "█   █",
+            "█   █",
+            " ███ ",
+        ),
     )
     _LOGO_COLORS = (
         "#60A5FA",
-        "#818CF8",
-        "#A78BFA",
-        "#C084FC",
-        "#E879F9",
-        "#F472B6",
+        "#6D9FFB",
+        "#7C92FA",
+        "#8B86F8",
+        "#9B7FF7",
+        "#A874F5",
+        "#B46DF1",
+        "#C066EB",
+        "#CC60E2",
+        "#D65BD8",
+        "#DF5DCA",
+        "#E762BB",
+        "#EC68AC",
+        "#F06E9D",
+        "#F47291",
         "#FB7185",
-        "#F9739F",
-        "#FB7185",
-        "#F472B6",
     )
 
     def __init__(self, parent=None):
@@ -233,7 +291,7 @@ class TerminalPanel(QFrame):
             light.setObjectName(object_name)
             light.setFixedSize(10, 10)
             traffic_layout.addWidget(light)
-        title = QLabel("PIPELINE CONSOLE")
+        title = QLabel("CONSOLE")
         title.setObjectName("terminalTitle")
         self.status = QLabel("READY")
         self.status.setObjectName("terminalStatus")
@@ -264,22 +322,18 @@ class TerminalPanel(QFrame):
         layout.addWidget(header)
         layout.addWidget(self.output, 1)
         self.show_startup_banner()
-        self.append_log("INFO", "실행 콘솔 준비 완료")
+        self.append_log("INFO", "콘솔이 준비되었습니다.")
 
     def show_startup_banner(self) -> None:
-        logo_lines: list[str] = []
-        for row in range(len(self._LOGO_COLUMNS[0])):
-            columns = (
-                f'<span style="color:{color}">'
-                f'{html.escape(column[row]).replace(" ", "&nbsp;")}</span>'
-                for column, color in zip(self._LOGO_COLUMNS, self._LOGO_COLORS)
-            )
-            logo_lines.append("&nbsp;".join(columns))
+        top_word = self._render_logo_word(*self._LOGO_WORD_RANGES[0])
+        bottom_word = self._render_logo_word(*self._LOGO_WORD_RANGES[1])
 
         banner = (
             '<div style="font-family:\'Cascadia Mono\',Consolas,monospace">'
-            '<div style="font-size:13px;font-weight:700;line-height:1.05">'
-            + "<br>".join(logo_lines)
+            '<div style="font-size:13px;font-weight:700;line-height:1.0">'
+            + "<br>".join(top_word)
+            + "<br>"
+            + "<br>".join(bottom_word)
             + "</div>"
             '<div style="margin-top:10px;color:#E8F0FA;font-size:14px;font-weight:700">'
             f'<span style="color:#86EFAC">&gt;_</span> PROMPTCASE STUDIO '
@@ -289,7 +343,64 @@ class TerminalPanel(QFrame):
             "</div>"
         )
         self.output.setHtml(banner)
+        self._apply_logo_text_outline()
         self.output.moveCursor(QTextCursor.End)
+
+    @classmethod
+    def _render_logo_word(cls, start: int, end: int) -> list[str]:
+        row_count = len(cls._LOGO_COLUMNS[0])
+        column_count = len(cls._LOGO_COLUMNS[0][0])
+        lines: list[str] = []
+        for row in range(row_count + 1):
+            glyphs: list[str] = []
+            for glyph, color_name in zip(
+                cls._LOGO_COLUMNS[start:end],
+                cls._LOGO_COLORS[start:end],
+            ):
+                shadow_color = QColor(color_name).darker(165).name()
+                cells: list[str] = []
+                for column in range(column_count + 1):
+                    is_main = (
+                        row < row_count
+                        and column < column_count
+                        and glyph[row][column] != " "
+                    )
+                    is_depth = (
+                        row > 0
+                        and column > 0
+                        and glyph[row - 1][column - 1] != " "
+                    )
+                    if is_main:
+                        cells.append(
+                            f'<span style="color:{color_name}">█</span>'
+                        )
+                    elif is_depth:
+                        cells.append(
+                            f'<span style="color:{shadow_color}">'
+                            f"{cls._LOGO_DEPTH_CHARACTER}</span>"
+                        )
+                    else:
+                        cells.append("&nbsp;")
+                glyphs.append("".join(cells))
+            lines.append("&nbsp;".join(glyphs))
+        return lines
+
+    def _apply_logo_text_outline(self) -> None:
+        document = self.output.document()
+        plain_text = document.toPlainText()
+        logo_end = plain_text.find(">_")
+        if logo_end < 0:
+            return
+        cursor = QTextCursor(document)
+        for position, character in enumerate(plain_text[:logo_end]):
+            if character != "█":
+                continue
+            cursor.setPosition(position)
+            cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor)
+            character_format = cursor.charFormat()
+            color = character_format.foreground().color()
+            character_format.setTextOutline(QPen(color.darker(175), 0.65))
+            cursor.setCharFormat(character_format)
 
     def append_log(self, level: str, message: str) -> None:
         if level == "ATTEMPT":
@@ -523,7 +634,7 @@ class MainWindow(QMainWindow):
         mark.setObjectName("brandMark")
         mark.setFixedSize(36, 36)
         mark.setAlignment(Qt.AlignCenter)
-        icon_pixmap = QIcon(str(PROJECT_ROOT / "favicon.ico")).pixmap(24, 24)
+        icon_pixmap = QIcon(str(PROJECT_ROOT / "favicon.ico")).pixmap(26, 26)
         if icon_pixmap.isNull():
             mark.setText("PC")
         else:
