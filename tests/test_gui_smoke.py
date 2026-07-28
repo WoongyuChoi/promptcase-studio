@@ -59,11 +59,13 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(brand_mark.size(), QSize(36, 36))
         self.assertIsNotNone(brand_mark.pixmap())
         self.assertFalse(brand_mark.pixmap().isNull())
-        self.assertEqual(brand_mark.pixmap().size(), QSize(26, 26))
+        self.assertEqual(brand_mark.pixmap().size(), QSize(36, 36))
         self.assertRegex(
             APP_STYLESHEET,
-            r"(?s)QLabel#brandMark\s*\{.*?border-radius:\s*18px;",
+            r"(?s)QLabel#brandMark\s*\{.*?background:\s*transparent;",
         )
+        self.assertIsNotNone(brand_mark.graphicsEffect())
+        self.assertEqual(brand_mark.graphicsEffect().blurRadius(), 12)
         self.assertIsNone(window.findChild(QLabel, "terminalSub"))
         self.assertEqual(
             window.findChild(QLabel, "terminalTitle").text(),
@@ -92,7 +94,7 @@ class GuiSmokeTests(unittest.TestCase):
         cursor = QTextCursor(window.terminal.output.document())
         cursor.setPosition(first_block)
         cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor)
-        self.assertNotEqual(cursor.charFormat().textOutline().style(), Qt.NoPen)
+        self.assertEqual(cursor.charFormat().textOutline().style(), Qt.NoPen)
         self.assertNotIn("SECURE NETWORK", startup_text)
         self.assertNotIn("qwen3.6-agent", startup_text)
         self.assertNotIn("SCAN > CONTEXT > AI > VALIDATE > EXCEL", startup_text)

@@ -1,6 +1,7 @@
 import json
 import re
 import unittest
+import xml.etree.ElementTree as ET
 
 from promptcase_studio import __version__
 from promptcase_studio.config import PROJECT_ROOT
@@ -17,6 +18,19 @@ class VersioningTests(unittest.TestCase):
         self.assertTrue(favicon.is_file())
         self.assertFalse((PROJECT_ROOT / "icons8-bot-70.ico").exists())
         self.assertTrue(favicon.read_bytes().startswith(b"\x00\x00\x01\x00"))
+
+    def test_top_brand_badge_uses_packaged_lucide_svg(self):
+        svg_path = PROJECT_ROOT / "assets" / "brand-bot.svg"
+        svg = svg_path.read_text(encoding="utf-8")
+        spec = (PROJECT_ROOT / "promptcase-studio.spec").read_text(encoding="utf-8")
+
+        root = ET.fromstring(svg)
+        self.assertTrue(root.tag.endswith("svg"))
+        self.assertIn("#38BDF8", svg)
+        self.assertIn("#2563EB", svg)
+        self.assertIn('d="M12 8V4H8"', svg)
+        self.assertIn('width="16" height="12" x="4" y="8" rx="2"', svg)
+        self.assertIn('(str(project_root / "assets"), "assets")', spec)
 
     def test_bundled_document_system_name_is_domain_neutral(self):
         settings = json.loads(

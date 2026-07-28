@@ -65,6 +65,7 @@ datas = [
     (str(project_root / "prompts"), "prompts"),
     (str(project_root / "schemas"), "schemas"),
     (str(project_root / "templates"), "templates"),
+    (str(project_root / "assets"), "assets"),
     (str(project_root / "favicon.ico"), "."),
 ]
 

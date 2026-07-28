@@ -15,15 +15,18 @@ from PyQt5.QtGui import (
     QDesktopServices,
     QFont,
     QIcon,
-    QPen,
+    QPainter,
+    QPixmap,
     QTextCursor,
 )
+from PyQt5.QtSvg import QSvgRenderer
 from PyQt5.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QDateEdit,
     QFileDialog,
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -45,7 +48,12 @@ from PyQt5.QtWidgets import (
 )
 
 from promptcase_studio import __version__
-from promptcase_studio.config import PROJECT_ROOT, load_settings, resolve_project_path
+from promptcase_studio.config import (
+    PROJECT_ROOT,
+    load_settings,
+    resolve_project_path,
+    resource_path,
+)
 from promptcase_studio.excel_writer import validate_workbook
 from promptcase_studio.models import AnalysisRequest, PipelineResult
 from promptcase_studio.template_catalog import UNIT_TEST_TEMPLATE
@@ -116,6 +124,18 @@ def _wrap_alert_text(message: object, width: int = 48) -> str:
 
 def _show_alert(method, parent, title: str, message: object, *args):
     return method(parent, title, _wrap_alert_text(message), *args)
+
+
+def _render_svg_pixmap(path: Path, size: QSize) -> QPixmap:
+    renderer = QSvgRenderer(str(path))
+    if not renderer.isValid():
+        return QPixmap()
+    pixmap = QPixmap(size)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    renderer.render(painter)
+    painter.end()
+    return pixmap
 
 
 def _validated_atomic_copy(source: Path, destination: Path) -> None:
@@ -343,7 +363,6 @@ class TerminalPanel(QFrame):
             "</div>"
         )
         self.output.setHtml(banner)
-        self._apply_logo_text_outline()
         self.output.moveCursor(QTextCursor.End)
 
     @classmethod
@@ -384,23 +403,6 @@ class TerminalPanel(QFrame):
                 glyphs.append("".join(cells))
             lines.append("&nbsp;".join(glyphs))
         return lines
-
-    def _apply_logo_text_outline(self) -> None:
-        document = self.output.document()
-        plain_text = document.toPlainText()
-        logo_end = plain_text.find(">_")
-        if logo_end < 0:
-            return
-        cursor = QTextCursor(document)
-        for position, character in enumerate(plain_text[:logo_end]):
-            if character != "█":
-                continue
-            cursor.setPosition(position)
-            cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor)
-            character_format = cursor.charFormat()
-            color = character_format.foreground().color()
-            character_format.setTextOutline(QPen(color.darker(175), 0.65))
-            cursor.setCharFormat(character_format)
 
     def append_log(self, level: str, message: str) -> None:
         if level == "ATTEMPT":
@@ -634,11 +636,21 @@ class MainWindow(QMainWindow):
         mark.setObjectName("brandMark")
         mark.setFixedSize(36, 36)
         mark.setAlignment(Qt.AlignCenter)
-        icon_pixmap = QIcon(str(PROJECT_ROOT / "favicon.ico")).pixmap(26, 26)
-        if icon_pixmap.isNull():
+        badge_pixmap = _render_svg_pixmap(
+            resource_path("assets/brand-bot.svg"),
+            QSize(36, 36),
+        )
+        if badge_pixmap.isNull():
+            badge_pixmap = QIcon(str(PROJECT_ROOT / "favicon.ico")).pixmap(26, 26)
+        if badge_pixmap.isNull():
             mark.setText("PC")
         else:
-            mark.setPixmap(icon_pixmap)
+            mark.setPixmap(badge_pixmap)
+        badge_shadow = QGraphicsDropShadowEffect(mark)
+        badge_shadow.setBlurRadius(12)
+        badge_shadow.setOffset(0, 3)
+        badge_shadow.setColor(QColor(37, 99, 235, 62))
+        mark.setGraphicsEffect(badge_shadow)
         title_box = QVBoxLayout()
         title_box.setSpacing(0)
         title = QLabel("PROMPTCASE STUDIO")
