@@ -12,6 +12,7 @@ from promptcase_studio.pipeline import (
     _configured_system_name,
     _correction_prompt,
     _document_title,
+    _generate_release_note_response,
     _program_category,
     _program_info,
     _quality_sources_for_bundle,
@@ -33,6 +34,52 @@ TEMP_ROOT = PROJECT_ROOT / "tmp" / "tests"
 
 
 class PipelineTests(unittest.TestCase):
+    def test_release_note_with_ten_checks_completes_without_retry(self):
+        case_directory = TEMP_ROOT / "release-note-ten-checks"
+        case_directory.mkdir(parents=True, exist_ok=True)
+        request_lines = "\n".join(
+            f"- 확인 단계 {index}의 변경 동작 또는 결과를 확인해 주세요."
+            for index in range(1, 11)
+        )
+        payload = {
+            "subject": "[공유] 사용자 저장 조건 변경",
+            "body": (
+                "안녕하세요.\n\n"
+                "사용자 저장 조건 변경 사항을 공유드립니다.\n\n"
+                "[변경 사항]\n"
+                "- 저장 조건 변경\n\n"
+                "[적용 범위]\n"
+                "- 사용자 정보 저장 기능\n\n"
+                "[확인 요청 사항]\n"
+                f"{request_lines}\n\n"
+                "확인 중 문제나 예상과 다른 결과가 있으면 메일 또는 메신저로 알려주세요.\n\n"
+                "감사합니다."
+            ),
+        }
+
+        class TenCheckProvider:
+            def __init__(self):
+                self.calls = 0
+
+            def generate(self, prompt, log=None, on_chunk=None):
+                self.calls += 1
+                return json.dumps(payload, ensure_ascii=False)
+
+        provider = TenCheckProvider()
+        logs = []
+
+        release_note = _generate_release_note_response(
+            provider,
+            "릴리즈 노트 프롬프트",
+            2,
+            case_directory,
+            lambda level, message: logs.append((level, message)),
+        )
+
+        self.assertEqual(provider.calls, 1)
+        self.assertIn("확인 단계 10", release_note["body"])
+        self.assertFalse(any(level == "RETRY" for level, _ in logs))
+
     def test_quality_sources_require_primary_diff_support_for_broad_request_scenarios(self):
         root = str(FIXTURE_ROOT.resolve())
         bundle = ScanBundle(

@@ -146,14 +146,127 @@ class ReleaseNoteTests(unittest.TestCase):
         with self.assertRaises(ReleaseNoteValidationError):
             parse_release_note_response(raw)
 
-    def test_response_parser_rejects_verbose_request_suffix(self):
+    def test_response_parser_normalizes_verbose_request_suffix(self):
         raw = """{
           "subject": "[공유] 사용자 저장 조건 변경 반영 및 확인 요청",
           "body": "안녕하세요.\\n\\n사용자 저장 조건 변경 사항을 공유드립니다.\\n\\n[변경 사항]\\n- 변경된 값이 없을 때 안내 메시지 표시\\n\\n[적용 범위]\\n- 사용자 정보 저장 기능\\n\\n[확인 요청 사항]\\n- 값을 바꾸지 않은 상태에서 저장해 주세요.\\n- 안내 메시지가 표시되는지 확인해 주세요.\\n\\n확인 중 문제나 예상과 다른 결과가 있으면 메일 또는 메신저로 알려주세요.\\n\\n감사합니다."
         }"""
 
-        with self.assertRaisesRegex(ReleaseNoteValidationError, "관용 표현"):
-            parse_release_note_response(raw)
+        normalization_logs = []
+        release_note = parse_release_note_response(
+            raw,
+            on_normalize=normalization_logs.append,
+        )
+
+        self.assertEqual(release_note["subject"], "[공유] 사용자 저장 조건 변경")
+        self.assertTrue(any("상투적인" in message for message in normalization_logs))
+
+    def test_response_parser_accepts_ten_request_items_from_five_test_pairs(self):
+        request_lines = "\n".join(
+            f"- 확인 단계 {index}의 변경 동작 또는 결과를 확인해 주세요."
+            for index in range(1, 11)
+        )
+        payload = {
+            "subject": "[공유] 사용자 저장 조건 변경",
+            "body": (
+                "안녕하세요.\n\n"
+                "사용자 저장 조건 변경 사항을 공유드립니다.\n\n"
+                "[변경 사항]\n"
+                "- 저장 조건 변경\n\n"
+                "[적용 범위]\n"
+                "- 사용자 정보 저장 기능\n\n"
+                "[확인 요청 사항]\n"
+                f"{request_lines}\n\n"
+                "확인 중 문제나 예상과 다른 결과가 있으면 메일 또는 메신저로 알려주세요.\n\n"
+                "감사합니다."
+            ),
+        }
+
+        release_note = parse_release_note_response(
+            json.dumps(payload, ensure_ascii=False)
+        )
+        lines = release_note["body"].splitlines()
+        request_start = lines.index("[확인 요청 사항]") + 1
+        request_end = lines.index(
+            "확인 중 문제나 예상과 다른 결과가 있으면 메일 또는 메신저로 알려주세요."
+        )
+        request_items = [
+            line for line in lines[request_start:request_end] if line
+        ]
+
+        self.assertEqual(len(request_items), 10)
+        self.assertTrue(all(line.startswith("- ") for line in request_items))
+
+    def test_response_parser_normalizes_common_qwen_mail_variations(self):
+        payload = {
+            "subject": "[릴리즈] 사용자 저장 조건 변경 반영 및 확인 요청",
+            "body": (
+                "안녕하세요. 사용자 저장 조건 변경 사항을 공유드립니다.\n\n"
+                "[주요 변경 사항]\n"
+                "* 변경된 값이 없을 때 안내 메시지 표시\n\n"
+                "[적용 범위]\n"
+                "1. 사용자 정보 저장 기능\n\n"
+                "[확인 요청 사항]\n"
+                "확인 중 문제가 있으면 메일 또는 메신저로 알려주세요.\n"
+                "1) 값을 바꾸지 않은 상태에서 저장해 주세요.\n"
+                "• 안내 메시지가 표시되는지 확인해 주세요.\n\n"
+                "감사합니다."
+            ),
+            "format": "mail",
+        }
+        normalization_logs = []
+
+        release_note = parse_release_note_response(
+            json.dumps(payload, ensure_ascii=False),
+            on_normalize=normalization_logs.append,
+        )
+
+        self.assertEqual(release_note["subject"], "[공유] 사용자 저장 조건 변경")
+        self.assertIn("\n[변경 사항]\n- 변경된 값", release_note["body"])
+        self.assertIn("\n[적용 범위]\n- 사용자 정보", release_note["body"])
+        self.assertLess(
+            release_note["body"].index("- 안내 메시지가 표시"),
+            release_note["body"].index("확인 중 문제가 있으면"),
+        )
+        self.assertTrue(any("부가 필드" in message for message in normalization_logs))
+        self.assertTrue(any("목록 기호" in message for message in normalization_logs))
+        self.assertTrue(any("연락 안내 위치" in message for message in normalization_logs))
+
+    def test_response_parser_caps_excess_request_items_without_retry(self):
+        request_lines = "\n".join(
+            f"{index}. 변경 확인 단계 {index}을 실행해 주세요."
+            for index in range(1, 15)
+        )
+        payload = {
+            "subject": "[공유] 사용자 저장 조건 변경",
+            "body": (
+                "안녕하세요.\n\n"
+                "사용자 저장 조건 변경 사항을 공유드립니다.\n\n"
+                "[변경 사항]\n"
+                "- 저장 조건 변경\n\n"
+                "[적용 범위]\n"
+                "- 사용자 정보 저장 기능\n\n"
+                "[확인 요청 사항]\n"
+                f"{request_lines}\n\n"
+                "감사합니다."
+            ),
+        }
+        normalization_logs = []
+
+        release_note = parse_release_note_response(
+            json.dumps(payload, ensure_ascii=False),
+            on_normalize=normalization_logs.append,
+        )
+        request_block = release_note["body"].split("[확인 요청 사항]\n", 1)[1]
+        request_items = [
+            line for line in request_block.splitlines() if line.startswith("- ")
+        ]
+
+        self.assertEqual(len(request_items), 12)
+        self.assertIn("변경 확인 단계 14", request_items[-1])
+        self.assertIn("메일 또는 메신저", release_note["body"])
+        self.assertTrue(any("최대 12개" in message for message in normalization_logs))
+        self.assertTrue(any("연락 안내" in message for message in normalization_logs))
 
     def test_fallback_builds_complete_mail_from_final_test_document(self):
         release_note = fallback_release_note(self.structured, "채산관리시스템")

@@ -431,7 +431,14 @@ def _generate_release_note_response(
         )
         _log_provider_diagnostics(provider, log)
         try:
-            return parse_release_note_response(response_text)
+            return parse_release_note_response(
+                response_text,
+                on_normalize=lambda message: _log(
+                    log,
+                    "NORMALIZE",
+                    f"릴리즈 노트 {message}",
+                ),
+            )
         except ReleaseNoteValidationError as exc:
             (run_directory / f"release-note.attempt-{attempt}.invalid.txt").write_text(
                 response_text,
